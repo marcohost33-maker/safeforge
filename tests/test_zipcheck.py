@@ -43,9 +43,15 @@ def site(*extra):
 
 
 def code_of(source, policy=None):
-    with pytest.raises(ZipRejected) as ei:
+    """Contract: validate_zip either returns or raises ZipRejected -- nothing else.
+    Any other exception is an assertion failure here, not a test crash."""
+    try:
         validate_zip(source, policy)
-    return ei.value.code
+        err = None
+    except Exception as e:  # noqa: BLE001
+        err = e
+    assert isinstance(err, ZipRejected), "expected ZipRejected, got %r" % (err,)
+    return err.code
 
 
 # ----------------------------------------------------------- positive control

@@ -23,7 +23,7 @@ CONFIGS = [("wal", "NORMAL"), ("wal", "FULL"), ("delete", "FULL")]
 
 
 def one(journal, sync, commits):
-    with tempfile.TemporaryDirectory() as d:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
         c = sqlite3.connect(os.path.join(d, "s.db"), isolation_level=None)
         c.execute("PRAGMA journal_mode=%s" % journal)
         c.execute("PRAGMA synchronous=%s" % sync)

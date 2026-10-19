@@ -41,14 +41,18 @@ def writer(path, journal, timeout_ms, begin, ops, start, q):
     ok = 0
     start.wait()
     for _ in range(ops):
+        stage = "begin"
         try:
             c.execute("BEGIN " + begin)
+            stage = "select"
             v = c.execute("SELECT v FROM counter WHERE id=1").fetchone()[0]
+            stage = "update"
             c.execute("UPDATE counter SET v=? WHERE id=1", (v + 1,))
+            stage = "commit"
             c.execute("COMMIT")
             ok += 1
         except sqlite3.OperationalError as e:
-            errors[getattr(e, "sqlite_errorname", str(e))] += 1
+            errors["%s@%s" % (getattr(e, "sqlite_errorname", str(e)), stage)] += 1
             if c.in_transaction:
                 c.execute("ROLLBACK")
     c.close()
@@ -71,7 +75,7 @@ def reader(path, journal, timeout_ms, stop, start, q):
 
 
 def run_one(journal, timeout_ms, begin, writers, readers, ops):
-    with tempfile.TemporaryDirectory() as d:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
         path = os.path.join(d, "c.db")
         c = sqlite3.connect(path, isolation_level=None)
         assert c.execute("PRAGMA journal_mode=%s" % journal).fetchone()[0] == journal
@@ -93,7 +97,9 @@ def run_one(journal, timeout_ms, begin, writers, readers, ops):
         results += [q.get(timeout=60) for _ in rs]
         for p in ws + rs:
             p.join(60)
-        final = sqlite3.connect(path).execute("SELECT v FROM counter WHERE id=1").fetchone()[0]
+        fc = sqlite3.connect(path)
+        final = fc.execute("SELECT v FROM counter WHERE id=1").fetchone()[0]
+        fc.close()
     w_ok = sum(r[1] for r in results if r[0] == "w")
     w_err: Counter = Counter()
     r_err: Counter = Counter()

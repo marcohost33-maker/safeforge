@@ -61,7 +61,7 @@ def main():
         ap.error("rows/lookups/reps must be > 0")
     rnd = random.Random(2)
     keys = ["k%09d" % rnd.randrange(a.rows) for _ in range(a.lookups)]
-    with tempfile.TemporaryDirectory() as d:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
         path = os.path.join(d, "m.db")
         build(path, a.rows)
         size = os.path.getsize(path)

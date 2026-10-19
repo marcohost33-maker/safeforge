@@ -1,0 +1,145 @@
+{
+  "env": {
+    "cpu_count": 8,
+    "git_dirty": true,
+    "git_head": "2e8d2bff321a253a486802b0fa8839ad2778a08b",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "python": "3.14.4",
+    "sqlite": "3.50.4",
+    "utc": "2026-10-19T19:27:04Z"
+  },
+  "params": {
+    "ops": 200,
+    "readers": 4,
+    "writers": 8
+  },
+  "rows": [
+    {
+      "begin": "DEFERRED",
+      "busy_timeout_ms": 0,
+      "final_counter": 535,
+      "journal": "delete",
+      "lost_updates": 0,
+      "reader_errors": {
+        "SQLITE_BUSY": 432
+      },
+      "reader_ok": 400,
+      "wall_s": 4.087,
+      "writer_attempts": 1600,
+      "writer_commits": 535,
+      "writer_errors": {
+        "SQLITE_BUSY": 1065
+      }
+    },
+    {
+      "begin": "IMMEDIATE",
+      "busy_timeout_ms": 0,
+      "final_counter": 542,
+      "journal": "delete",
+      "lost_updates": 0,
+      "reader_errors": {
+        "SQLITE_BUSY": 434
+      },
+      "reader_ok": 404,
+      "wall_s": 4.44,
+      "writer_attempts": 1600,
+      "writer_commits": 542,
+      "writer_errors": {
+        "SQLITE_BUSY": 1058
+      }
+    },
+    {
+      "begin": "DEFERRED",
+      "busy_timeout_ms": 5000,
+      "final_counter": 580,
+      "journal": "delete",
+      "lost_updates": 0,
+      "reader_errors": {
+        "SQLITE_BUSY": 882
+      },
+      "reader_ok": 1175,
+      "wall_s": 5.546,
+      "writer_attempts": 1600,
+      "writer_commits": 580,
+      "writer_errors": {
+        "SQLITE_BUSY": 1020
+      }
+    },
+    {
+      "begin": "IMMEDIATE",
+      "busy_timeout_ms": 5000,
+      "final_counter": 1596,
+      "journal": "delete",
+      "lost_updates": 0,
+      "reader_errors": {
+        "SQLITE_BUSY": 1402
+      },
+      "reader_ok": 6394,
+      "wall_s": 14.712,
+      "writer_attempts": 1600,
+      "writer_commits": 1596,
+      "writer_errors": {
+        "SQLITE_BUSY": 4
+      }
+    },
+    {
+      "begin": "DEFERRED",
+      "busy_timeout_ms": 0,
+      "final_counter": 200,
+      "journal": "wal",
+      "lost_updates": 0,
+      "reader_errors": {},
+      "reader_ok": 1973,
+      "wall_s": 0.066,
+      "writer_attempts": 1600,
+      "writer_commits": 200,
+      "writer_errors": {
+        "SQLITE_BUSY": 1400
+      }
+    },
+    {
+      "begin": "IMMEDIATE",
+      "busy_timeout_ms": 0,
+      "final_counter": 137,
+      "journal": "wal",
+      "lost_updates": 0,
+      "reader_errors": {},
+      "reader_ok": 2262,
+      "wall_s": 0.08,
+      "writer_attempts": 1600,
+      "writer_commits": 137,
+      "writer_errors": {
+        "SQLITE_BUSY": 1463
+      }
+    },
+    {
+      "begin": "DEFERRED",
+      "busy_timeout_ms": 5000,
+      "final_counter": 149,
+      "journal": "wal",
+      "lost_updates": 0,
+      "reader_errors": {},
+      "reader_ok": 1984,
+      "wall_s": 0.07,
+      "writer_attempts": 1600,
+      "writer_commits": 149,
+      "writer_errors": {
+        "SQLITE_BUSY": 1430,
+        "SQLITE_BUSY_SNAPSHOT": 21
+      }
+    },
+    {
+      "begin": "IMMEDIATE",
+      "busy_timeout_ms": 5000,
+      "final_counter": 1600,
+      "journal": "wal",
+      "lost_updates": 0,
+      "reader_errors": {},
+      "reader_ok": 10884,
+      "wall_s": 0.341,
+      "writer_attempts": 1600,
+      "writer_commits": 1600,
+      "writer_errors": {}
+    }
+  ]
+}

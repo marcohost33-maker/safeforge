@@ -42,6 +42,14 @@ def site(*extra):
     return build(list(SITE.items()) + list(extra))
 
 
+def accepted(source, policy=None):
+    """Positive control: the archive must pass. A rejection is an assertion failure."""
+    try:
+        return validate_zip(source, policy)
+    except Exception as e:  # noqa: BLE001
+        raise AssertionError("valid archive rejected: %r" % (e,)) from e
+
+
 def code_of(source, policy=None):
     """Contract: validate_zip either returns or raises ZipRejected -- nothing else.
     Any other exception is an assertion failure here, not a test crash."""
@@ -56,7 +64,7 @@ def code_of(source, policy=None):
 
 # ----------------------------------------------------------- positive control
 def test_valid_site_passes_and_extracts(tmp_path):
-    entries = validate_zip(site())
+    entries = accepted(site())
     assert {e.name for e in entries} == set(SITE)
     dest = tmp_path / "out"
     extract_zip(site(), str(dest))
@@ -65,7 +73,7 @@ def test_valid_site_passes_and_extracts(tmp_path):
 
 
 def test_directory_entries_are_fine():
-    assert validate_zip(site(("assets/", b""), ("assets/x.txt", b"x")))
+    assert accepted(site(("assets/", b""), ("assets/x.txt", b"x")))
 
 
 # ------------------------------------------------------------- name attacks
@@ -141,7 +149,7 @@ def test_fifo_rejected():
 
 
 def test_regular_unix_file_ok():
-    assert validate_zip(site((_unix(stat.S_IFREG | 0o644), "ok.txt", b"x")))
+    assert accepted(site((_unix(stat.S_IFREG | 0o644), "ok.txt", b"x")))
 
 
 def test_reparse_point_rejected():
@@ -196,7 +204,7 @@ def test_small_highly_compressible_file_is_not_a_ratio_hit():
     data = b"\0" * 60_000
     info_ratio = len(data) / zipfile.ZipFile(site(("small.txt", data))).getinfo("small.txt").compress_size
     assert info_ratio > ZipPolicy().max_ratio  # precondition: the ratio rule WOULD fire
-    assert validate_zip(site(("small.txt", data)))
+    assert accepted(site(("small.txt", data)))
 
 
 def _dup_central_record(raw: bytes) -> bytes:
@@ -277,7 +285,7 @@ def test_missing_root_index():
 
 
 def test_root_index_optional():
-    assert validate_zip(build([("site/index.html", b"x")]), ZipPolicy(require_root_index=False))
+    assert accepted(build([("site/index.html", b"x")]), ZipPolicy(require_root_index=False))
 
 
 def test_not_a_zip():

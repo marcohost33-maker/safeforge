@@ -1,12 +1,12 @@
 {
   "env": {
     "cpu_count": 8,
-    "git_dirty": true,
-    "git_head": "ff8ca81ab4468c76d39b52cbd324d3404ad29e00",
+    "git_dirty": false,
+    "git_head": "3b52564d1a4a5355946851880f2cddea47c2250f",
     "platform": "Windows-11-10.0.26200-SP0",
     "python": "3.14.4",
     "sqlite": "3.50.4",
-    "utc": "2026-10-19T19:53:44Z"
+    "utc": "2026-10-19T20:00:34Z"
   },
   "params": {
     "ops": 200,
@@ -17,55 +17,55 @@
     {
       "begin": "DEFERRED",
       "busy_timeout_ms": 0,
-      "final_counter": 299,
+      "final_counter": 398,
       "journal": "delete",
       "lost_updates": 0,
       "reader_errors": {
-        "SQLITE_BUSY": 402
+        "SQLITE_BUSY": 335
       },
-      "reader_ok": 460,
-      "wall_s": 2.935,
+      "reader_ok": 456,
+      "wall_s": 3.622,
       "writer_attempts": 1600,
-      "writer_commits": 299,
+      "writer_commits": 398,
       "writer_errors": {
-        "SQLITE_BUSY@commit": 56,
-        "SQLITE_BUSY@select": 631,
-        "SQLITE_BUSY@update": 614
+        "SQLITE_BUSY@commit": 61,
+        "SQLITE_BUSY@select": 496,
+        "SQLITE_BUSY@update": 645
       }
     },
     {
       "begin": "IMMEDIATE",
       "busy_timeout_ms": 0,
-      "final_counter": 230,
+      "final_counter": 324,
       "journal": "delete",
       "lost_updates": 0,
       "reader_errors": {
-        "SQLITE_BUSY": 227
+        "SQLITE_BUSY": 348
       },
-      "reader_ok": 2357,
-      "wall_s": 2.982,
+      "reader_ok": 470,
+      "wall_s": 3.348,
       "writer_attempts": 1600,
-      "writer_commits": 230,
+      "writer_commits": 324,
       "writer_errors": {
-        "SQLITE_BUSY@begin": 1323,
-        "SQLITE_BUSY@commit": 47
+        "SQLITE_BUSY@begin": 1219,
+        "SQLITE_BUSY@commit": 57
       }
     },
     {
       "begin": "DEFERRED",
       "busy_timeout_ms": 5000,
-      "final_counter": 948,
+      "final_counter": 420,
       "journal": "delete",
       "lost_updates": 0,
       "reader_errors": {
-        "SQLITE_BUSY": 997
+        "SQLITE_BUSY": 726
       },
-      "reader_ok": 918,
-      "wall_s": 11.644,
+      "reader_ok": 1076,
+      "wall_s": 5.359,
       "writer_attempts": 1600,
-      "writer_commits": 948,
+      "writer_commits": 420,
       "writer_errors": {
-        "SQLITE_BUSY@update": 652
+        "SQLITE_BUSY@update": 1180
       }
     },
     {
@@ -75,10 +75,10 @@
       "journal": "delete",
       "lost_updates": 0,
       "reader_errors": {
-        "SQLITE_BUSY": 1886
+        "SQLITE_BUSY": 1942
       },
-      "reader_ok": 3697,
-      "wall_s": 19.511,
+      "reader_ok": 4407,
+      "wall_s": 15.998,
       "writer_attempts": 1600,
       "writer_commits": 1595,
       "writer_errors": {
@@ -88,48 +88,48 @@
     {
       "begin": "DEFERRED",
       "busy_timeout_ms": 0,
-      "final_counter": 184,
+      "final_counter": 149,
       "journal": "wal",
       "lost_updates": 0,
       "reader_errors": {},
-      "reader_ok": 2195,
-      "wall_s": 0.143,
+      "reader_ok": 2436,
+      "wall_s": 0.058,
       "writer_attempts": 1600,
-      "writer_commits": 184,
+      "writer_commits": 149,
       "writer_errors": {
-        "SQLITE_BUSY@update": 1384,
-        "SQLITE_BUSY_SNAPSHOT@update": 32
+        "SQLITE_BUSY@update": 1432,
+        "SQLITE_BUSY_SNAPSHOT@update": 19
       }
     },
     {
       "begin": "IMMEDIATE",
       "busy_timeout_ms": 0,
-      "final_counter": 110,
+      "final_counter": 188,
       "journal": "wal",
       "lost_updates": 0,
       "reader_errors": {},
-      "reader_ok": 1678,
-      "wall_s": 0.075,
+      "reader_ok": 2365,
+      "wall_s": 0.057,
       "writer_attempts": 1600,
-      "writer_commits": 110,
+      "writer_commits": 188,
       "writer_errors": {
-        "SQLITE_BUSY@begin": 1490
+        "SQLITE_BUSY@begin": 1412
       }
     },
     {
       "begin": "DEFERRED",
       "busy_timeout_ms": 5000,
-      "final_counter": 183,
+      "final_counter": 199,
       "journal": "wal",
       "lost_updates": 0,
       "reader_errors": {},
-      "reader_ok": 2017,
-      "wall_s": 0.179,
+      "reader_ok": 1784,
+      "wall_s": 0.077,
       "writer_attempts": 1600,
-      "writer_commits": 183,
+      "writer_commits": 199,
       "writer_errors": {
-        "SQLITE_BUSY@update": 1380,
-        "SQLITE_BUSY_SNAPSHOT@update": 37
+        "SQLITE_BUSY@update": 1400,
+        "SQLITE_BUSY_SNAPSHOT@update": 1
       }
     },
     {
@@ -139,8 +139,8 @@
       "journal": "wal",
       "lost_updates": 0,
       "reader_errors": {},
-      "reader_ok": 13115,
-      "wall_s": 0.618,
+      "reader_ok": 8573,
+      "wall_s": 0.23,
       "writer_attempts": 1600,
       "writer_commits": 1600,
       "writer_errors": {}

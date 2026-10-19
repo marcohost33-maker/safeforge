@@ -232,6 +232,33 @@ def test_lying_size_header_is_caught_by_full_pass():
     assert isinstance(err, ZipRejected) and err.code == "corrupt_data", repr(err)
 
 
+def _grow_declared_size(raw: bytes) -> bytes:
+    """Lie the other way: declare 'index.html' 5 bytes LONGER than its data."""
+    eocd = raw.rfind(b"PK\x05\x06")
+    cd_off = struct.unpack("<I", raw[eocd + 16: eocd + 20])[0]
+    b = bytearray(raw)
+    real = struct.unpack("<I", b[cd_off + 24: cd_off + 28])[0]
+    b[cd_off + 24: cd_off + 28] = struct.pack("<I", real + 5)
+    return bytes(b)
+
+
+def test_declared_size_larger_than_data():
+    try:
+        validate_zip(build(list(SITE.items()), mutate=_grow_declared_size))
+        err = None
+    except Exception as e:  # noqa: BLE001
+        err = e
+    assert isinstance(err, ZipRejected) and err.code == "size_mismatch", repr(err)
+
+
+def test_empty_name():
+    assert code_of(site(("", b"x"))) == "empty_name"
+
+
+def test_directory_entry_with_data():
+    assert code_of(site(("d/", b"payload"))) == "dir_with_data"
+
+
 # ------------------------------------------------------------------- misc
 def test_missing_root_index():
     assert code_of(build([("site/index.html", b"x")])) == "missing_root_index"

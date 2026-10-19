@@ -234,6 +234,9 @@ def extract_zip(
             target = os.path.join(base, *rel.split("/"))
             parent = target if info.is_dir() else os.path.dirname(target)
             os.makedirs(parent, exist_ok=True)
+            # Defence in depth: after _validate no name can escape, and dest_dir is
+            # new. This line is therefore not reachable by a test archive (and is
+            # not claimed as tested); it guards against future changes to _validate.
             if os.path.commonpath([base, os.path.realpath(parent)]) != base:
                 raise ZipRejected("escape", "target resolves outside destination", info.orig_filename)
             if info.is_dir():

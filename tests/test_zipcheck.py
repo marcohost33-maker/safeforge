@@ -190,7 +190,13 @@ def test_compression_ratio_bomb():
 
 
 def test_small_highly_compressible_file_is_not_a_ratio_hit():
-    assert validate_zip(site(("small.txt", b"\0" * 4000)))
+    # 60 000 zero bytes deflate to ~75 bytes: ratio ~800, far above max_ratio=200,
+    # but below ratio_min_bytes (64 KiB). (4 000 bytes gave ratio ~190 -- below 200,
+    # so that version of this test could not see the exemption at all; DK found it.)
+    data = b"\0" * 60_000
+    info_ratio = len(data) / zipfile.ZipFile(site(("small.txt", data))).getinfo("small.txt").compress_size
+    assert info_ratio > ZipPolicy().max_ratio  # precondition: the ratio rule WOULD fire
+    assert validate_zip(site(("small.txt", data)))
 
 
 def _dup_central_record(raw: bytes) -> bytes:

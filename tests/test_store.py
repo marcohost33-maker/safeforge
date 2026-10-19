@@ -84,8 +84,12 @@ def test_expected_digest_accepted(store):
     ],
 )
 def test_invalid_arguments_rejected_before_any_io(store, kwargs, exc):
-    with pytest.raises(exc):
+    try:
         store.ingest(io.BytesIO(b"abc"), **kwargs)
+        err = None
+    except Exception as e:  # noqa: BLE001 -- the TYPE is the assertion
+        err = e
+    assert type(err) is exc, "expected %s before any I/O, got %r" % (exc.__name__, err)
     assert os.listdir(store.staging_dir) == []
 
 

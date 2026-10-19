@@ -2,11 +2,11 @@
   "env": {
     "cpu_count": 8,
     "git_dirty": true,
-    "git_head": "3e605524c18cb3a63d95bb355aed929342242185",
+    "git_head": "ea901b70255765fe2013c0be7f948c449b19e574",
     "platform": "Windows-11-10.0.26200-SP0",
     "python": "3.14.4",
     "sqlite": "3.50.4",
-    "utc": "2026-10-19T19:31:00Z"
+    "utc": "2026-10-19T19:58:14Z"
   },
   "params": {
     "commits": 2000,
@@ -15,27 +15,27 @@
   "rows": {
     "delete+FULL": {
       "all": [
-        49.1,
-        71.7,
-        58.0
+        54.3,
+        70.5,
+        81.4
       ],
-      "median_commits_per_s": 58.0
+      "median_commits_per_s": 70.5
     },
     "wal+FULL": {
       "all": [
-        327.7,
-        314.4,
-        285.3
+        311.6,
+        342.3,
+        331.9
       ],
-      "median_commits_per_s": 314.4
+      "median_commits_per_s": 331.9
     },
     "wal+NORMAL": {
       "all": [
-        9076.9,
-        9819.9,
-        5373.0
+        9684.5,
+        10850.1,
+        16298.3
       ],
-      "median_commits_per_s": 9076.9
+      "median_commits_per_s": 10850.1
     }
   }
 }

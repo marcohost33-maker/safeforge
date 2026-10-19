@@ -11,6 +11,7 @@ import errno
 import io
 import os
 import sys
+import threading
 import time
 
 import pytest
@@ -138,6 +139,92 @@ def test_corrected_concurrent_reconciler_at_every_point(tmp_path, point):
     assert inv.violations(lay) == []
     if acked:
         assert inv.rows(lay)[acked][0] == "stored"
+
+
+def test_corrected_writer_cannot_resurrect_a_failed_row(tmp_path):
+    """The interleaving the conditional UPDATE exists for:
+
+    reconciler marks the pending row 'failed' (object not there yet)
+    -> writer publishes the object
+    -> reconciler deletes the object of the failed row
+    -> writer commits its status.
+
+    An unconditional UPDATE would now report success for a 'stored' row
+    without a file. Threads + failpoints make the order deterministic."""
+    root = str(tmp_path)
+    writer = ObjectStore(root)
+    paused, resume, done = threading.Event(), threading.Event(), threading.Event()
+    errors = []
+
+    def reconciler():
+        try:
+            s = ObjectStore(root)
+            s.reconcile(grace_seconds=0, now=time.time() + LATER)
+            s.close()
+        except Exception as e:  # pragma: no cover
+            errors.append(e)
+        finally:
+            done.set()
+
+    def hook(name):
+        if name == "intent.committed":
+            threading.Thread(target=reconciler).start()
+            assert paused.wait(10)
+        elif name == "reconcile.pending_resolved":
+            paused.set()
+            assert resume.wait(10)
+        elif name == "object.published":
+            resume.set()
+            assert done.wait(10)
+
+    _faults.set_hook(hook)
+    acked = None
+    try:
+        acked = writer.ingest(io.BytesIO(b"w" * 1000), max_bytes=1 << 20).object_id
+    except IngestAborted:
+        pass
+    finally:
+        _faults.set_hook(None)
+        writer.close()
+    assert errors == []
+    assert acked is None, "writer reported success for an object the reconciler had already failed"
+    assert inv.violations(inv.corrected(root)) == []
+
+
+def test_corrected_young_pending_object_is_kept(tmp_path):
+    root = str(tmp_path)
+    rc, _, err = run_crash("corrected", root, "object.published")
+    assert rc == CRASH_EXIT, err
+    with ObjectStore(root) as s:
+        assert s.reconcile(grace_seconds=300).changes == 0
+        assert len(os.listdir(s.objects_dir)) == 1
+
+
+def test_corrected_young_staging_file_is_kept(tmp_path):
+    with ObjectStore(str(tmp_path)) as s:
+        p = os.path.join(s.staging_dir, "1" * 32 + ".part")
+        with open(p, "wb") as f:
+            f.write(b"still streaming")
+        assert s.reconcile(grace_seconds=300).deleted_staging == 0
+        assert os.path.exists(p)
+        assert s.reconcile(grace_seconds=0, now=time.time() + LATER).deleted_staging == 1
+
+
+def test_error_after_commit_never_deletes_the_stored_object(tmp_path):
+    root = str(tmp_path)
+
+    def hook(name):
+        if name == "status.committed":
+            raise RuntimeError("caller-side failure after the commit")
+
+    with ObjectStore(root) as s:
+        _faults.set_hook(hook)
+        with pytest.raises(RuntimeError):
+            s.ingest(io.BytesIO(b"keep me"), max_bytes=100)
+        _faults.set_hook(None)
+    lay = inv.corrected(root)
+    assert [st for st, _ in inv.rows(lay).values()] == ["stored"]
+    assert inv.violations(lay) == []
 
 
 # ---------------------------------------------------------------- T3 (naive)

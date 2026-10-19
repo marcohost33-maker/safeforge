@@ -101,7 +101,8 @@ def test_t13_failed_effect_is_not_recorded_and_can_be_retried(tmp_path):
     assert r.applied and _licences(path, "evt_3") == 1
 
 
-@pytest.mark.parametrize("bad", ["", "a b", "x" * 201, None, 5, "evt\n1", "evt1\n"])
+@pytest.mark.parametrize("bad", ["", "a b", "x" * 201, None, 5, "evt\n1", "evt1\n"],
+                         ids=["empty", "space", "too-long", "none", "int", "inner-newline", "trailing-newline"])
 def test_t13_rejects_malformed_event_ids(tmp_path, bad):
     c = _setup(str(tmp_path / "e.db"))
     with pytest.raises(ValueError):

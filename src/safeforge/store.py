@@ -378,6 +378,7 @@ class ObjectStore:
                         (now, oid),
                     )
                 rep.marked_failed += cur.rowcount
+        _faults.point("reconcile.pending_resolved")
 
         # (b) objects/: delete files of failed rows and old unreferenced files.
         for name in sorted(os.listdir(self.objects_dir)):

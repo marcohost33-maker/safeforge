@@ -222,7 +222,14 @@ def _shrink_declared_size(raw: bytes) -> bytes:
 
 
 def test_lying_size_header_is_caught_by_full_pass():
-    assert code_of(build(list(SITE.items()), mutate=_shrink_declared_size)) == "corrupt_data"
+    # Contract: only ZipRejected leaves validate_zip -- a raw zipfile.BadZipFile
+    # escaping would be a contract break, so it is asserted, not just expected.
+    try:
+        validate_zip(build(list(SITE.items()), mutate=_shrink_declared_size))
+        err = None
+    except Exception as e:  # noqa: BLE001
+        err = e
+    assert isinstance(err, ZipRejected) and err.code == "corrupt_data", repr(err)
 
 
 # ------------------------------------------------------------------- misc

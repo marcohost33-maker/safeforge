@@ -352,7 +352,12 @@ class ObjectStore:
         the grace period (the final UPDATE is conditional); it only avoids
         failing uploads that are merely slow.
         """
-        if not isinstance(grace_seconds, (int, float)) or isinstance(grace_seconds, bool) or not math.isfinite(grace_seconds) or grace_seconds < 0:
+        if (
+            not isinstance(grace_seconds, (int, float))
+            or isinstance(grace_seconds, bool)
+            or not math.isfinite(grace_seconds)
+            or grace_seconds < 0
+        ):
             raise ValueError("grace_seconds must be a finite number >= 0")
         now = time.time() if now is None else now
         cutoff = now - grace_seconds
@@ -414,8 +419,8 @@ class ObjectStore:
                 rep.skipped.append("%s: %s" % (path, e))
 
         # (d) stored rows whose file is gone or wrong: cannot be repaired, only reported.
-        for oid, sha, size in self._conn.execute(
-            "SELECT id, sha256, size FROM objects WHERE status='stored'"
+        for oid, size in self._conn.execute(
+            "SELECT id, size FROM objects WHERE status='stored'"
         ).fetchall():
             p = self._obj(oid)
             if not os.path.isfile(p) or os.path.getsize(p) != size:

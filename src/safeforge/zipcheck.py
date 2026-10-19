@@ -173,7 +173,7 @@ def _validate(zf: zipfile.ZipFile, policy: ZipPolicy) -> list[ZipEntry]:
     # Entries that overlap share compressed data -- the non-recursive zip bomb construction.
     spans = sorted((i.header_offset, i.header_offset + _LOCAL_HEADER_MIN + i.compress_size, i.orig_filename) for i in infos)
     end_of_data = zf.start_dir
-    for (a0, a1, name), nxt in zip(spans, spans[1:] + [(end_of_data, None, None)]):
+    for (_start, a1, name), nxt in zip(spans, spans[1:] + [(end_of_data, None, None)], strict=True):
         if a1 > nxt[0]:
             raise ZipRejected("overlap", "entry data overlaps the next entry or the central directory", name)
 

@@ -35,7 +35,10 @@ def save(name: str, payload: dict) -> str:
     os.makedirs(out_dir, exist_ok=True)
     tag = "%s-%s-py%s" % (name, sys.platform, sys.version_info[0] * 100 + sys.version_info[1])
     path = os.path.join(out_dir, tag + ".json")
+    # env() BEFORE opening: open(..., "w") truncates the tracked result file,
+    # and git would then report the tree as dirty because of this very write.
+    meta = env()
     with open(path, "w", encoding="utf-8", newline="\n") as f:
-        json.dump({"env": env(), **payload}, f, indent=2, sort_keys=True)
+        json.dump({"env": meta, **payload}, f, indent=2, sort_keys=True)
         f.write("\n")
     return path

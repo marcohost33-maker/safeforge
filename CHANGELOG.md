@@ -44,6 +44,11 @@ tests are process kills.
 - `backup_offline` fsynced the backup database through a read-only handle,
   which fails with `EBADF` on Windows.
 - Two test portability defects (`UPDATE … LIMIT`, an over-long parametrize id).
+- Test-only: the portable R9 guard tests wrote a copy of `lock()`'s registry
+  bookkeeping instead of calling `lock()`, so on Windows/macOS they stayed
+  green when `lock()` registered under another key or never deregistered.
+  They now run the real `coordination.lock()` with only flock and the POSIX
+  ownership/marker checks stubbed, and add a nested-lock test.
 
 ### Known limits
 - Verified locally on Windows (Python 3.12) only. Linux results come from the

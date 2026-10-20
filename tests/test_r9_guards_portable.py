@@ -2,12 +2,20 @@
 
 test_r9_context_attestation.py runs only on Linux because it needs a real
 flock. The guards SF-R9-01/02/03/05/06 themselves are plain Python/SQLite
-logic over the process-local lock registry. Here that registry entry is set
-directly (``_simulated_hold``), so the guards can be checked on Windows and
-macOS too. WHITE-BOX: this replaces only the flock bookkeeping, not the
-lock; it says nothing about flock semantics (those stay Linux-tested).
-SF-R9-04 (marker O_NOFOLLOW/owner/mode/link count) needs POSIX and is not
-covered here.
+logic over the process-local lock registry. Here the registry entry comes from
+the REAL ``coordination.lock()`` with only its OS layer stubbed (``hold``
+fixture: ``_fcntl`` -> recording no-op flock, ``_private_root`` and
+``_check_marker`` -> no-ops, because they need ``os.getuid``), so the guards
+can be checked on Windows and macOS too, against the registration, key
+derivation and release that ``lock()`` really performs.
+
+An earlier version wrote a copy of lock()'s registry bookkeeping into the test.
+It stayed green when lock() registered under a different key or did not
+deregister on exit (DK-20261020T094739, both BLIND on Windows): it tested the
+guards against the copy, not against lock().
+
+WHITE-BOX: says nothing about flock semantics or the POSIX marker/ownership
+checks (SF-R9-04: O_NOFOLLOW/owner/mode/link count); those stay Linux-tested.
 """
 
 from __future__ import annotations
@@ -49,26 +57,41 @@ def _rejected_by(exc_type, needle, fn, *args, **kwargs):
     raise AssertionError("not rejected at all; expected %s" % exc_type.__name__)
 
 
-@contextmanager
-def _simulated_hold(root):
-    """Registry bookkeeping exactly as coordination.lock() does, without flock."""
-    key = str(Path(root).absolute())
-    contexts = coordination._contexts()
-    contexts[key] = contexts.get(key, 0) + 1
-    try:
-        yield
-    finally:
-        contexts[key] -= 1
-        if not contexts[key]:
-            del contexts[key]
+class _RecordingFlock:
+    LOCK_SH, LOCK_EX, LOCK_NB = 1, 2, 4
+
+    def __init__(self):
+        self.calls = []
+
+    def flock(self, fd, flags):
+        self.calls.append(flags)
 
 
-def test_r9_01_coordinated_connect_needs_live_registry_entry(tmp_path):
+@pytest.fixture
+def hold(monkeypatch):
+    """``hold(root)``: the real coordination.lock(root, exclusive=False), OS layer stubbed."""
+    flock = _RecordingFlock()
+    monkeypatch.setattr(coordination, "_fcntl", lambda: flock)
+    monkeypatch.setattr(coordination, "_private_root", lambda root: None)
+    monkeypatch.setattr(coordination, "_check_marker", lambda root: None)
+
+    @contextmanager
+    def _hold(root):
+        before = len(flock.calls)
+        with coordination.lock(root, exclusive=False):
+            # Proof that lock() itself ran (and took the shared, non-blocking lock).
+            assert flock.calls[before:] == [flock.LOCK_SH | flock.LOCK_NB]
+            yield
+
+    return _hold
+
+
+def test_r9_01_coordinated_connect_needs_live_registry_entry(tmp_path, hold):
     root = _marked_root(tmp_path)
     with pytest.raises(CoordinationRejected, match="live lock"):
         connect(str(root / "safeforge.db"), coordinated=True)
     # Positive control: the same call succeeds while held.
-    with _simulated_hold(root):
+    with hold(root):
         con = connect(str(root / "safeforge.db"), coordinated=True)
         try:
             assert con.execute("SELECT count(*) FROM objects").fetchone()[0] == 1
@@ -78,9 +101,9 @@ def test_r9_01_coordinated_connect_needs_live_registry_entry(tmp_path):
         connect(str(root / "safeforge.db"), coordinated=True)
 
 
-def test_r9_02_connection_and_cursor_recheck_after_release(tmp_path):
+def test_r9_02_connection_and_cursor_recheck_after_release(tmp_path, hold):
     root = _marked_root(tmp_path)
-    with _simulated_hold(root):
+    with hold(root):
         con = connect(str(root / "safeforge.db"), coordinated=True)
         cur = con.cursor()
         assert cur.execute("SELECT count(*) FROM objects").fetchone()[0] == 1
@@ -94,10 +117,10 @@ def test_r9_02_connection_and_cursor_recheck_after_release(tmp_path):
         con.close()
 
 
-def test_r9_03_authorizer_denies_native_execute_after_release(tmp_path):
+def test_r9_03_authorizer_denies_native_execute_after_release(tmp_path, hold):
     root = _marked_root(tmp_path)
     sql = "SELECT count(*) FROM objects"
-    with _simulated_hold(root):
+    with hold(root):
         con = connect(str(root / "safeforge.db"), coordinated=True)
         # Prepared while held: a statement cache would let it run again later.
         assert sqlite3.Connection.execute(con, sql).fetchone()[0] == 1
@@ -110,7 +133,7 @@ def test_r9_03_authorizer_denies_native_execute_after_release(tmp_path):
         con.close()
 
 
-def test_r9_05_coordinated_store_and_connect_refuse_noncanonical_paths(tmp_path):
+def test_r9_05_coordinated_store_and_connect_refuse_noncanonical_paths(tmp_path, hold):
     root = _marked_root(tmp_path)
     # These checks run before the lock is taken, so they hold on every platform.
     # Must be the path guard itself, not a later lock/marker/connect failure.
@@ -118,15 +141,16 @@ def test_r9_05_coordinated_store_and_connect_refuse_noncanonical_paths(tmp_path)
     _rejected_by(IngestError, "staging", ObjectStore, str(root), coordinated=True, staging_dir=str(tmp_path / "external-staging"))
     assert not (tmp_path / "external.db").exists()
     assert not (tmp_path / "external-staging").exists()
-    with _simulated_hold(root):
+    with hold(root):
         with pytest.raises(ConfigurationError, match="root/safeforge.db"):
             connect(str(root / "another.db"), coordinated=True)
     assert not (root / "another.db").exists()
 
 
-def test_r9_06_registry_from_another_pid_is_discarded(tmp_path, monkeypatch):
+def test_r9_06_registry_from_another_pid_is_discarded(tmp_path, monkeypatch, hold):
     root = tmp_path / "any"
-    with _simulated_hold(root):
+    root.mkdir()  # the real lock() opens root/LOCK
+    with hold(root):
         require_held(root)  # positive control: same pid, entry present
         real_pid = os.getpid()
         # What a forked child sees: inherited thread-local data, new pid.
@@ -134,3 +158,14 @@ def test_r9_06_registry_from_another_pid_is_discarded(tmp_path, monkeypatch):
         with pytest.raises(CoordinationRejected, match="live lock"):
             require_held(root)
         monkeypatch.undo()
+
+
+def test_r9_nested_hold_survives_inner_release(tmp_path, hold):
+    """lock()'s reference count: closing an inner context must not drop the outer one."""
+    root = _marked_root(tmp_path)
+    with hold(root):
+        with hold(root):
+            require_held(root)
+        require_held(root)  # outer context still live
+    with pytest.raises(CoordinationRejected, match="live lock"):
+        require_held(root)

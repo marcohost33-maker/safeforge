@@ -74,7 +74,9 @@ def test_foreign_symlink_is_not_a_stored_object(tmp_path):
     assert external.read_bytes()==b'known-content'
 
 @pytest.mark.skipif(os.name=='nt',reason='POSIX no-clobber property')
-@pytest.mark.parametrize('data',[b'',b'payload'*4096,b'\x00'*100000])
+# Explicit ids: the default id for the 100000-byte value is ~400000 chars, which
+# exceeds the Windows 32767-char limit for PYTEST_CURRENT_TEST (teardown ERROR).
+@pytest.mark.parametrize('data',[b'',b'payload'*4096,b'\x00'*100000],ids=['empty','payload-28672B','zeros-100000B'])
 def test_noreplace_exclusive_name_property(tmp_path,data):
     a,b=tmp_path/'src',tmp_path/'dst'
     a.write_bytes(data)

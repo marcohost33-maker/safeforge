@@ -26,8 +26,10 @@ make the verdict platform-dependent.
 
 from __future__ import annotations
 
+import math
 import os
 import re
+import shutil
 import stat
 import unicodedata
 import zipfile
@@ -63,8 +65,18 @@ class ZipPolicy:
             v = getattr(self, name)
             if not isinstance(v, int) or isinstance(v, bool) or v <= 0:
                 raise ValueError("%s must be a positive int" % name)
-        if not (self.max_ratio > 0):
-            raise ValueError("max_ratio must be > 0")
+        if (isinstance(self.max_ratio, bool) or not isinstance(self.max_ratio, (int, float))
+                or not math.isfinite(self.max_ratio) or self.max_ratio <= 0):
+            raise ValueError("max_ratio must be a positive finite number")
+        if type(self.require_root_index) is not bool:
+            raise ValueError("require_root_index must be bool")
+        if (type(self.ratio_min_bytes) is not int or self.ratio_min_bytes < 0):
+            raise ValueError("ratio_min_bytes must be a non-negative integer")
+        if (not isinstance(self.allowed_methods, tuple) or not self.allowed_methods
+                or any(type(m) is not int or m not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)
+                       for m in self.allowed_methods)
+                or len(set(self.allowed_methods)) != len(self.allowed_methods)):
+            raise ValueError("allowed_methods must be a nonempty unique tuple of STORED/DEFLATED methods")
 
 
 @dataclass(frozen=True)
@@ -160,7 +172,7 @@ def _validate(zf: zipfile.ZipFile, policy: ZipPolicy) -> list[ZipEntry]:
             total += info.file_size
             if total > policy.max_total_bytes:
                 raise ZipRejected("total_too_large", "uncompressed total > %d bytes" % policy.max_total_bytes, raw)
-            if info.file_size >= policy.ratio_min_bytes:
+            if info.file_size > 0 and info.file_size >= policy.ratio_min_bytes:
                 if info.compress_size == 0 or info.file_size / info.compress_size > policy.max_ratio:
                     raise ZipRejected("ratio", "compression ratio above %g" % policy.max_ratio, raw)
         out.append(ZipEntry(raw.rstrip("/") if is_dir else raw, info.file_size, is_dir))
@@ -228,20 +240,35 @@ def extract_zip(
     with _open(source) as zf:
         entries = _validate(zf, policy)
         os.makedirs(dest_dir, exist_ok=False)
-        base = os.path.realpath(dest_dir)
-        for info in zf.infolist():
-            rel = info.orig_filename.rstrip("/")
-            target = os.path.join(base, *rel.split("/"))
-            parent = target if info.is_dir() else os.path.dirname(target)
-            os.makedirs(parent, exist_ok=True)
-            # Defence in depth: after _validate no name can escape, and dest_dir is
-            # new. This line is therefore not reachable by a test archive (and is
-            # not claimed as tested); it guards against future changes to _validate.
-            if os.path.commonpath([base, os.path.realpath(parent)]) != base:
-                raise ZipRejected("escape", "target resolves outside destination", info.orig_filename)
-            if info.is_dir():
-                continue
-            with zf.open(info) as src, open(target, "xb") as dst:
-                for chunk in iter(lambda: src.read(1 << 16), b""):
-                    dst.write(chunk)
+        try:
+            base = os.path.realpath(dest_dir)
+            total_written = 0
+            for info in zf.infolist():
+                rel = info.orig_filename.rstrip("/")
+                target = os.path.join(base, *rel.split("/"))
+                parent = target if info.is_dir() else os.path.dirname(target)
+                os.makedirs(parent, exist_ok=True)
+                if os.path.commonpath([base, os.path.realpath(parent)]) != base:
+                    raise ZipRejected("escape", "target resolves outside destination", info.orig_filename)
+                if info.is_dir():
+                    continue
+                n = 0
+                try:
+                    with zf.open(info) as src, open(target, "xb") as dst:
+                        for chunk in iter(lambda: src.read(1 << 16), b""):
+                            n += len(chunk)
+                            total_written += len(chunk)
+                            if n > info.file_size or n > policy.max_entry_bytes or total_written > policy.max_total_bytes:
+                                raise ZipRejected("size_mismatch", "extraction exceeded verified size budget", info.orig_filename)
+                            dst.write(chunk)
+                except (zipfile.BadZipFile, EOFError, NotImplementedError, RuntimeError) as exc:
+                    raise ZipRejected("corrupt_data", "archive changed or extraction failed", info.orig_filename) from exc
+                if n != info.file_size:
+                    raise ZipRejected("size_mismatch", "extracted size differs from declared size", info.orig_filename)
+        except BaseException:
+            # Never expose a half-extracted app as a successful output. This
+            # cleanup assumes dest_dir has a trusted/private parent; concurrent
+            # hostile filesystem writers require a dirfd-based extractor.
+            shutil.rmtree(dest_dir)
+            raise
     return entries

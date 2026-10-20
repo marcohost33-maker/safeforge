@@ -57,6 +57,11 @@ class EventResult:
     result: Any
 
 
+def _reject_json_constant(value: str):
+    """Reject NaN/Infinity in previously persisted JSON, including corrupt rows."""
+    raise ValueError("non-standard JSON constant in persisted event result: %s" % value)
+
+
 def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.execute(_SCHEMA)
 
@@ -88,7 +93,7 @@ def process_event(
             result = effect(conn)
             conn.execute(
                 "UPDATE processed_events SET result_json=? WHERE event_id=?",
-                (json.dumps(result), event_id),
+                (json.dumps(result, allow_nan=False), event_id),
             )
             return EventResult(True, result)
         old_sha, old_json = conn.execute(
@@ -96,4 +101,4 @@ def process_event(
         ).fetchone()
     if old_sha != psha:
         raise PayloadMismatch("event %s was already processed with a different payload" % event_id)
-    return EventResult(False, json.loads(old_json) if old_json is not None else None)
+    return EventResult(False, json.loads(old_json, parse_constant=_reject_json_constant) if old_json is not None else None)

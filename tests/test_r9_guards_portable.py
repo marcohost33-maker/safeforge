@@ -32,6 +32,23 @@ def _marked_root(tmp_path) -> Path:
     return root
 
 
+def _rejected_by(exc_type, needle, fn, *args, **kwargs):
+    """Assert WHICH layer rejected, not only that something raised.
+
+    The guards are layered (re-check, then SQLite authorizer, then flock), so a
+    removed layer usually still ends in *some* exception from the next one.
+    A plain pytest.raises would then fail by an escaping foreign exception;
+    this turns "the wrong layer rejected" into an explicit assertion.
+    """
+    try:
+        fn(*args, **kwargs)
+    except Exception as exc:  # noqa: BLE001 -- the type is what we assert on
+        assert type(exc) is exc_type, "rejected by %s(%s), expected %s" % (type(exc).__name__, exc, exc_type.__name__)
+        assert needle in str(exc), str(exc)
+        return
+    raise AssertionError("not rejected at all; expected %s" % exc_type.__name__)
+
+
 @contextmanager
 def _simulated_hold(root):
     """Registry bookkeeping exactly as coordination.lock() does, without flock."""
@@ -68,14 +85,11 @@ def test_r9_02_connection_and_cursor_recheck_after_release(tmp_path):
         cur = con.cursor()
         assert cur.execute("SELECT count(*) FROM objects").fetchone()[0] == 1
     try:
-        with pytest.raises(CoordinationRejected, match="live lock"):
-            con.execute("UPDATE objects SET updated_at=updated_at+1")
-        with pytest.raises(CoordinationRejected, match="live lock"):
-            cur.execute("UPDATE objects SET updated_at=updated_at+1")
-        with pytest.raises(CoordinationRejected, match="live lock"):
-            con.cursor()
-        with pytest.raises(CoordinationRejected, match="live lock"):
-            con.commit()
+        # Must be the Python re-check, not the authorizer backstop behind it.
+        _rejected_by(CoordinationRejected, "live lock", con.execute, "UPDATE objects SET updated_at=updated_at+1")
+        _rejected_by(CoordinationRejected, "live lock", cur.execute, "UPDATE objects SET updated_at=updated_at+1")
+        _rejected_by(CoordinationRejected, "live lock", con.cursor)
+        _rejected_by(CoordinationRejected, "live lock", con.commit)
     finally:
         con.close()
 
@@ -99,10 +113,9 @@ def test_r9_03_authorizer_denies_native_execute_after_release(tmp_path):
 def test_r9_05_coordinated_store_and_connect_refuse_noncanonical_paths(tmp_path):
     root = _marked_root(tmp_path)
     # These checks run before the lock is taken, so they hold on every platform.
-    with pytest.raises(IngestError, match="database inside"):
-        ObjectStore(str(root), coordinated=True, db_path=str(tmp_path / "external.db"))
-    with pytest.raises(IngestError, match="staging"):
-        ObjectStore(str(root), coordinated=True, staging_dir=str(tmp_path / "external-staging"))
+    # Must be the path guard itself, not a later lock/marker/connect failure.
+    _rejected_by(IngestError, "database inside", ObjectStore, str(root), coordinated=True, db_path=str(tmp_path / "external.db"))
+    _rejected_by(IngestError, "staging", ObjectStore, str(root), coordinated=True, staging_dir=str(tmp_path / "external-staging"))
     assert not (tmp_path / "external.db").exists()
     assert not (tmp_path / "external-staging").exists()
     with _simulated_hold(root):

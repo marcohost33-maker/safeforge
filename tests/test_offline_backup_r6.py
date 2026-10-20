@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import io
 import sqlite3
 
@@ -178,3 +179,18 @@ def test_backup_includes_event_records_not_just_objects(tmp_path):
     db = sqlite3.connect(target / "safeforge.db")
     assert db.execute("SELECT event_id FROM processed_events").fetchall() == [("evt_backup",)]
     db.close()
+
+
+def test_backup_database_fsync_uses_writable_handle(tmp_path):
+    """Regression: on Windows os.fsync on a read-only handle raises EBADF.
+
+    Discriminates only on Windows; POSIX accepts fsync on a read-only fd.
+    """
+    src, _ = _stored(tmp_path)
+    try:
+        report = backup_offline(src, tmp_path / "b", confirmed_quiescent=True)
+    except OSError as exc:
+        if exc.errno == errno.EBADF:
+            raise AssertionError("backup_offline fsynced through a read-only handle: %r" % (exc,)) from exc
+        raise
+    assert report["stored_objects"] == 2

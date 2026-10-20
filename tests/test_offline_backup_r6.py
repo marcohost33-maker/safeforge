@@ -44,7 +44,10 @@ def test_refuse_pending_or_staging_or_extra_object(tmp_path):
         backup_offline(src, tmp_path / "b2", confirmed_quiescent=True)
     (src / "objects" / ("0" * 32)).unlink()
     con = sqlite3.connect(src / "safeforge.db")
-    con.execute("UPDATE objects SET status='pending' LIMIT 1")
+    # UPDATE ... LIMIT needs SQLITE_ENABLE_UPDATE_DELETE_LIMIT, which the
+    # python.org Windows build lacks; a subquery is portable.
+    cur = con.execute("UPDATE objects SET status='pending' WHERE id = (SELECT id FROM objects ORDER BY id LIMIT 1)")
+    assert cur.rowcount == 1
     con.commit()
     con.close()
     with pytest.raises(BackupRejected, match="pending"):

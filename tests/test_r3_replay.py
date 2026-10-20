@@ -1,8 +1,9 @@
 """R3 idempotency and at-rest integrity; adversarial + positive controls."""
 import io
-import time
+
 import pytest
-from safeforge import ObjectStore, IdempotencyConflict, TooLarge, IngestError
+
+from safeforge import IdempotencyConflict, IngestError, ObjectStore, TooLarge
 
 
 def test_same_key_identical_replay_is_verified(tmp_path):

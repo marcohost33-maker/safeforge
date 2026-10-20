@@ -21,8 +21,8 @@ Defaults and why:
 
 from __future__ import annotations
 
-import sqlite3
 import os
+import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 
@@ -104,7 +104,7 @@ def connect(
         raise TypeError("coordinated must be bool")
     # A new R8 connection must acknowledge the coordinated protocol. This is
     # NOT an enforcement mechanism against old versions or raw sqlite3.connect.
-    from .coordination import initialized, require_held, CoordinationRejected
+    from .coordination import CoordinationRejected, initialized, require_held
     parent = os.path.dirname(os.path.abspath(path))
     if initialized(parent):
         if not coordinated:

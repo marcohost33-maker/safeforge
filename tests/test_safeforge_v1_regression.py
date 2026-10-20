@@ -3,8 +3,10 @@ import errno
 import sys
 from pathlib import Path
 from unittest.mock import patch
+
 import pytest
-from safeforge.durable import publish, CrossDeviceError
+
+from safeforge.durable import CrossDeviceError, publish
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="POSIX hard-link path only; Windows unchanged")
 

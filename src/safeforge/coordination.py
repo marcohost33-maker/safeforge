@@ -4,6 +4,7 @@ This is NOT a mandatory filesystem fence. Every writer must opt in, including
 webhook/event writes, reconciler jobs and migrations. Non-cooperating raw SQLite
 clients and filesystem writers can bypass flock. Never use on network FS.
 """
+
 from __future__ import annotations
 
 import os
@@ -14,14 +15,14 @@ from pathlib import Path
 
 MODE = ".safeforge-coordinated-v1"
 LOCK = ".safeforge-coordination.lock"
-MARKER_CONTENT = b'R8 cooperative POSIX-only; raw writes are not fenced\n'
+MARKER_CONTENT = b"R8 cooperative POSIX-only; raw writes are not fenced\n"
 # A registry is only a process-local API consistency gate, NOT a security boundary.
 # It binds opt-in to a live coordination context rather than a forgeable bool.
 _held = threading.local()
 
 
 def _contexts() -> dict:
-    if getattr(_held, 'pid', None) != os.getpid():
+    if getattr(_held, "pid", None) != os.getpid():
         _held.pid = os.getpid()
         _held.contexts = {}
     return _held.contexts
@@ -35,28 +36,27 @@ def require_held(root: str | os.PathLike) -> None:
     """
     key = str(Path(root).absolute())
     if not _contexts().get(key):
-        raise CoordinationRejected('coordinated=True requires a live lock in this process/thread')
+        raise CoordinationRejected("coordinated=True requires a live lock in this process/thread")
 
 
 def _check_marker(root: Path) -> None:
     marker = root / MODE
     try:
         st = os.lstat(marker)
-        if (not stat.S_ISREG(st.st_mode) or st.st_nlink != 1 or
-                st.st_uid != os.getuid() or (st.st_mode & 0o077)):
-            raise CoordinationRejected('invalid coordination marker metadata')
-        fd = os.open(marker, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
+        if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1 or st.st_uid != os.getuid() or (st.st_mode & 0o077):
+            raise CoordinationRejected("invalid coordination marker metadata")
+        fd = os.open(marker, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
         try:
             opened = os.fstat(fd)
             if (opened.st_dev, opened.st_ino) != (st.st_dev, st.st_ino):
-                raise CoordinationRejected('coordination marker replaced')
+                raise CoordinationRejected("coordination marker replaced")
             content = os.read(fd, len(MARKER_CONTENT) + 1)
         finally:
             os.close(fd)
         if content != MARKER_CONTENT:
-            raise CoordinationRejected('invalid coordination marker content')
+            raise CoordinationRejected("invalid coordination marker content")
     except FileNotFoundError as exc:
-        raise CoordinationRejected('coordination not initialized') from exc
+        raise CoordinationRejected("coordination not initialized") from exc
 
 
 class CoordinationRejected(RuntimeError):
@@ -64,16 +64,17 @@ class CoordinationRejected(RuntimeError):
 
 
 def _fcntl():
-    if os.name != 'posix':
+    if os.name != "posix":
         raise CoordinationRejected("POSIX flock is required; no Windows guarantee")
     import fcntl
+
     return fcntl
 
 
 def _regular_fd(root: Path) -> int:
     path = root / LOCK
     # No symlink following, never replace the lock inode.
-    fd = os.open(path, os.O_CREAT | os.O_RDWR | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+    fd = os.open(path, os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
     mode = os.fstat(fd).st_mode
     if not stat.S_ISREG(mode):
         os.close(fd)
@@ -108,15 +109,17 @@ def initialize(root: str | os.PathLike, *, externally_quiescent: bool = False) -
         if marker.is_symlink():
             raise CoordinationRejected("coordination marker is a symlink")
         if not marker.exists():
-            fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+            fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
             try:
                 os.write(fd, MARKER_CONTENT)
                 os.fsync(fd)
             finally:
                 os.close(fd)
-            dfd = os.open(path, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
-            try: os.fsync(dfd)
-            finally: os.close(dfd)
+            dfd = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            try:
+                os.fsync(dfd)
+            finally:
+                os.close(dfd)
         _check_marker(path)
 
 
@@ -131,7 +134,8 @@ def lock(root: str | os.PathLike, *, exclusive: bool, require_marker: bool = Tru
     fd = _regular_fd(root)
     try:
         flags = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
-        if nonblocking: flags |= fcntl.LOCK_NB
+        if nonblocking:
+            flags |= fcntl.LOCK_NB
         try:
             fcntl.flock(fd, flags)
         except BlockingIOError as exc:
@@ -139,8 +143,11 @@ def lock(root: str | os.PathLike, *, exclusive: bool, require_marker: bool = Tru
         # Detect replacement of the lock filename after opening (untrusted actors
         # with write permission on the root violate our private-directory model).
         opened, named = os.fstat(fd), os.lstat(root / LOCK)
-        if ((opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino)
-                or not stat.S_ISREG(named.st_mode) or named.st_nlink != 1):
+        if (
+            (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino)
+            or not stat.S_ISREG(named.st_mode)
+            or named.st_nlink != 1
+        ):
             raise CoordinationRejected("lock inode replaced")
         # Validate marker AFTER acquiring the lock as well as before.
         if require_marker:
@@ -162,8 +169,9 @@ def lock(root: str | os.PathLike, *, exclusive: bool, require_marker: bool = Tru
 def event_writer(root: str | os.PathLike):
     """Event mutations must run on this connection within the shared lock."""
     from . import db
+
     with lock(root, exclusive=False):
-        conn = db.connect(str(Path(root) / 'safeforge.db'), coordinated=True)
+        conn = db.connect(str(Path(root) / "safeforge.db"), coordinated=True)
         try:
             yield conn
         finally:

@@ -1,19 +1,20 @@
 """R6 offline backup positive and adversarial controls. Test artifacts are isolated."""
+
 from __future__ import annotations
+
 import io
-import json
-import os
 import sqlite3
+
 import pytest
+
 from safeforge import ObjectStore
-from safeforge.offline_backup import backup_offline, verify_backup, restore_offline, BackupRejected
+from safeforge.offline_backup import BackupRejected, backup_offline, restore_offline, verify_backup
 
 
 def _stored(tmp_path):
     src = tmp_path / "store"
     with ObjectStore(str(src)) as s:
-        ids = [s.ingest(io.BytesIO(b"object" + bytes([j]) * 8192), max_bytes=16384).object_id
-               for j in range(2)]
+        ids = [s.ingest(io.BytesIO(b"object" + bytes([j]) * 8192), max_bytes=16384).object_id for j in range(2)]
     return src, ids
 
 
@@ -44,7 +45,8 @@ def test_refuse_pending_or_staging_or_extra_object(tmp_path):
     (src / "objects" / ("0" * 32)).unlink()
     con = sqlite3.connect(src / "safeforge.db")
     con.execute("UPDATE objects SET status='pending' LIMIT 1")
-    con.commit(); con.close()
+    con.commit()
+    con.close()
     with pytest.raises(BackupRejected, match="pending"):
         backup_offline(src, tmp_path / "b3", confirmed_quiescent=True)
 
@@ -69,7 +71,8 @@ def test_data_corruption_and_unexpected_content_rejected(tmp_path):
     b = tmp_path / "b"
     backup_offline(src, b, confirmed_quiescent=True)
     target = b / "objects" / ids[0]
-    payload = bytearray(target.read_bytes()); payload[0] ^= 1
+    payload = bytearray(target.read_bytes())
+    payload[0] ^= 1
     target.write_bytes(payload)
     with pytest.raises(BackupRejected, match="hash mismatch"):
         verify_backup(b)
@@ -83,14 +86,16 @@ def test_refuse_existing_destination_or_inside_source(tmp_path):
     src, _ = _stored(tmp_path)
     with pytest.raises(BackupRejected, match="outside"):
         backup_offline(src, src / "sub", confirmed_quiescent=True)
-    existing = tmp_path / "existing"; existing.mkdir()
+    existing = tmp_path / "existing"
+    existing.mkdir()
     with pytest.raises(FileExistsError):
         backup_offline(src, existing, confirmed_quiescent=True)
 
 
 def test_restore_refuses_existing_target(tmp_path):
     src, _ = _stored(tmp_path)
-    b = tmp_path / "b"; backup_offline(src, b, confirmed_quiescent=True)
+    b = tmp_path / "b"
+    backup_offline(src, b, confirmed_quiescent=True)
     with pytest.raises(FileExistsError):
         restore_offline(b, src, confirmed_quiescent=True)
 
@@ -98,6 +103,7 @@ def test_restore_refuses_existing_target(tmp_path):
 def test_concurrent_writer_detected_and_no_complete_marker(tmp_path, monkeypatch):
     # Deterministic interleaving via a second SQLite connection, not a timing gamble.
     from safeforge import offline_backup as bmod
+
     src, _ = _stored(tmp_path)
     original = bmod._file_copy_verified
     triggered = False
@@ -109,7 +115,8 @@ def test_concurrent_writer_detected_and_no_complete_marker(tmp_path, monkeypatch
             triggered = True
             conn = sqlite3.connect(src / "safeforge.db")
             conn.execute("UPDATE objects SET updated_at=updated_at+1")
-            conn.commit(); conn.close()
+            conn.commit()
+            conn.close()
 
     monkeypatch.setattr(bmod, "_file_copy_verified", competing_commit)
     archive = tmp_path / "interleaved"
@@ -122,6 +129,7 @@ def test_concurrent_writer_detected_and_no_complete_marker(tmp_path, monkeypatch
 
 def test_staging_creation_during_backup_detected(tmp_path, monkeypatch):
     from safeforge import offline_backup as bmod
+
     src, _ = _stored(tmp_path)
     original = bmod._file_copy_verified
     fired = False
@@ -145,7 +153,8 @@ def test_tamper_with_db_backup_fails_manifest_integrity(tmp_path):
     archive = tmp_path / "b"
     backup_offline(src, archive, confirmed_quiescent=True)
     dbpath = archive / "database.sqlite3"
-    raw = bytearray(dbpath.read_bytes()); raw[-5] ^= 1
+    raw = bytearray(dbpath.read_bytes())
+    raw[-5] ^= 1
     dbpath.write_bytes(raw)
     with pytest.raises(BackupRejected, match="checksum"):
         verify_backup(archive)
@@ -153,15 +162,16 @@ def test_tamper_with_db_backup_fails_manifest_integrity(tmp_path):
 
 def test_backup_includes_event_records_not_just_objects(tmp_path):
     from safeforge import connect, ensure_schema, process_event
+
     src, ids = _stored(tmp_path)
-    con = connect(str(src / 'safeforge.db'))
+    con = connect(str(src / "safeforge.db"))
     ensure_schema(con)
-    process_event(con, 'evt_backup', b'hello', lambda c: {'ok': True})
+    process_event(con, "evt_backup", b"hello", lambda c: {"ok": True})
     con.close()
-    archive = tmp_path / 'b'
+    archive = tmp_path / "b"
     backup_offline(src, archive, confirmed_quiescent=True)
-    target = tmp_path / 'restored'
+    target = tmp_path / "restored"
     restore_offline(archive, target, confirmed_quiescent=True)
-    db = sqlite3.connect(target / 'safeforge.db')
-    assert db.execute('SELECT event_id FROM processed_events').fetchall() == [('evt_backup',)]
+    db = sqlite3.connect(target / "safeforge.db")
+    assert db.execute("SELECT event_id FROM processed_events").fetchall() == [("evt_backup",)]
     db.close()

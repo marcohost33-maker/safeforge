@@ -38,8 +38,8 @@ import hashlib
 import math
 import os
 import re
-import stat
 import sqlite3
+import stat
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -168,7 +168,10 @@ def _open_regular(path: str):
     try:
         opened = os.fstat(fd)
         after = os.lstat(path)
-        sig = lambda st: (st.st_dev, st.st_ino)
+
+        def sig(st: os.stat_result) -> tuple[int, int]:
+            return (st.st_dev, st.st_ino)
+
         if not stat.S_ISREG(opened.st_mode) or sig(before) != sig(opened) or sig(after) != sig(opened):
             raise OSError("object changed while opening")
         return os.fdopen(fd, "rb")

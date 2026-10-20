@@ -11,11 +11,11 @@ import json
 import os
 import re
 import sqlite3
-from pathlib import Path
 from contextlib import closing
+from pathlib import Path
 
 from . import durable
-from .store import _open_regular, _file_matches
+from .store import _file_matches, _open_regular
 
 _NAME = re.compile(r"^[0-9a-f]{32}$")
 _HASH = re.compile(r"^[0-9a-f]{64}$")
@@ -270,7 +270,9 @@ def restore_offline(backup: str | os.PathLike, new_root: str | os.PathLike,
                 raise BackupRejected("restored DB differs from manifest")
         # Re-check that the verified manifest and marker did not change during
         # restore. This is a tamper/race *detector*, not cryptographic authorship.
-        if (source / "manifest.json").read_bytes() != verified_material or (source / "COMPLETE").read_bytes() != (hashlib.sha256(verified_material).hexdigest().encode("ascii") + b"\n"):
+        expected_marker = hashlib.sha256(verified_material).hexdigest().encode("ascii") + b"\n"
+        if ((source / "manifest.json").read_bytes() != verified_material
+                or (source / "COMPLETE").read_bytes() != expected_marker):
             raise BackupRejected("backup manifest or COMPLETE changed during restore")
         for d in (target / "objects", target / "staging", target):
             durable.fsync_dir(str(d))

@@ -21,6 +21,7 @@ Defaults and why:
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -34,13 +35,85 @@ class ConfigurationError(RuntimeError):
     """The database could not be put into the required mode."""
 
 
+class _CoordinatedCursor(sqlite3.Cursor):
+    """R9 cooperative gate on cursor statement execution (not a raw SQLite fence)."""
+
+    def _check(self):
+        from .coordination import require_held
+        require_held(self.connection._guard_root)
+
+    def execute(self, *args, **kwargs):
+        self._check()
+        return super().execute(*args, **kwargs)
+
+    def executemany(self, *args, **kwargs):
+        self._check()
+        return super().executemany(*args, **kwargs)
+
+    def executescript(self, *args, **kwargs):
+        self._check()
+        return super().executescript(*args, **kwargs)
+
+
+class _CoordinatedConnection(sqlite3.Connection):
+    """Validate a held writer lock at each DB-API execute, not only at connect.
+
+    Does NOT replace process isolation: direct sqlite3 and uncoordinated native
+    database clients can still bypass this library, as can inherited raw FDs.
+    """
+
+    def _check(self):
+        from .coordination import require_held
+        require_held(self._guard_root)
+
+    def cursor(self, *args, **kwargs):
+        self._check()
+        kwargs.setdefault('factory', _CoordinatedCursor)
+        return super().cursor(*args, **kwargs)
+
+    def execute(self, *args, **kwargs):
+        self._check()
+        return super().execute(*args, **kwargs)
+
+    def executemany(self, *args, **kwargs):
+        self._check()
+        return super().executemany(*args, **kwargs)
+
+    def executescript(self, *args, **kwargs):
+        self._check()
+        return super().executescript(*args, **kwargs)
+
+    def commit(self):
+        self._check()
+        return super().commit()
+
+    # Rollback, closing and interrupt are allowed without a held lock to
+    # facilitate fail-closed cleanup. Native sqlite3.Connection method calls
+    # can bypass Python overrides; this is NOT a security sandbox.
+
+
 def connect(
     path: str,
     *,
     synchronous: str = "FULL",
     busy_timeout_ms: int = 5000,
+    coordinated: bool = False,
 ) -> sqlite3.Connection:
     """Open ``path`` in WAL mode with an explicit-transaction connection."""
+    if type(coordinated) is not bool:
+        raise TypeError("coordinated must be bool")
+    # A new R8 connection must acknowledge the coordinated protocol. This is
+    # NOT an enforcement mechanism against old versions or raw sqlite3.connect.
+    from .coordination import CoordinationRejected, initialized, require_held
+    parent = os.path.dirname(os.path.abspath(path))
+    if initialized(parent):
+        if not coordinated:
+            raise ConfigurationError("coordinated store: use coordination.event_writer / ObjectStore(coordinated=True)")
+        if os.path.basename(path) != 'safeforge.db':
+            raise ConfigurationError("coordinated database must be root/safeforge.db")
+        require_held(parent)
+    elif coordinated:
+        raise ConfigurationError("coordinated=True requires an initialized root")
     sync = synchronous.upper()
     if sync not in ("NORMAL", "FULL", "EXTRA"):
         raise ValueError("synchronous must be NORMAL, FULL or EXTRA (OFF is not crash-safe)")
@@ -48,7 +121,24 @@ def connect(
         raise TypeError("busy_timeout_ms must be int")
     if busy_timeout_ms < 0:
         raise ValueError("busy_timeout_ms must be >= 0")
-    conn = sqlite3.connect(path, timeout=busy_timeout_ms / 1000.0, isolation_level=None)
+    factory = _CoordinatedConnection if coordinated else sqlite3.Connection
+    # Disable SQLite statement-cache reuse for coordinated connections: the
+    # authorizer is called on prepare, not reliably on every cached execution.
+    conn = sqlite3.connect(path, timeout=busy_timeout_ms / 1000.0,
+                           isolation_level=None, factory=factory,
+                           cached_statements=0 if coordinated else 128)
+    if coordinated:
+        conn._guard_root = parent
+        def _require_live_context(action, arg1, arg2, database_name, caller):
+            try:
+                require_held(parent)
+            except CoordinationRejected:
+                return sqlite3.SQLITE_DENY
+            return sqlite3.SQLITE_OK
+        # Defence in depth for direct sqlite3.Connection.execute subclass bypass.
+        # A malicious in-process actor can clear this authorizer via the C API;
+        # this is NOT OS-enforced mandatory writer fencing.
+        conn.set_authorizer(_require_live_context)
     try:
         conn.execute("PRAGMA busy_timeout=%d" % busy_timeout_ms)
         mode = conn.execute("PRAGMA journal_mode=WAL").fetchone()[0]

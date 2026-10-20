@@ -6,8 +6,8 @@ leaves a state the reconciler can classify without guessing:
 
     1. stream into  staging/<id>.part   (same volume as objects/), hash, fsync
     2. COMMIT intent row  status='pending'            -- short IMMEDIATE txn
-    3. publish  staging/<id>.part -> objects/<id>     -- atomic rename, no clobber
-    4. fsync objects/ and staging/                    -- make the rename durable
+    3. publish via exclusive link, then unlink stage -- no-clobber, two operations (POSIX)
+    4. fsync objects/ and staging/                    -- persist both directory changes
     5. COMMIT  status='stored'  WHERE status='pending' -- conditional, short txn
     6. only now report success to the caller
 
@@ -39,6 +39,7 @@ import math
 import os
 import re
 import sqlite3
+import stat
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -129,17 +130,71 @@ class ReconcileReport:
         return self.rolled_forward + self.marked_failed + self.deleted_objects + self.deleted_staging
 
 
+def _bounded_digest(stream: BinaryIO, max_bytes: int, chunk_size: int) -> tuple[str, int]:
+    """Consume a replay stream once; enforce exactly the same size cap as staging.
+
+    A reused idempotency key is not evidence that its NEW request body matches
+    the old body. Reading/hashing is deliberate: fast replay with an
+    unverified body could silently acknowledge unrelated content.
+    """
+    digest = hashlib.sha256()
+    size = 0
+    while True:
+        chunk = stream.read(chunk_size)
+        if not chunk:
+            break
+        if not isinstance(chunk, (bytes, bytearray, memoryview)):
+            raise TypeError("stream.read() must return bytes")
+        size += len(chunk)
+        if size > max_bytes:
+            raise TooLarge("stream exceeds max_bytes=%d" % max_bytes)
+        digest.update(chunk)
+    return digest.hexdigest(), size
+
+
+def _open_regular(path: str):
+    """Open a regular file, refusing final-component symlinks where supported.
+
+    Compare the descriptor identity to lstat both before and after opening.
+    This is stronger than islink()+open(), but parent directories must remain
+    private/trusted. On Windows O_NOFOLLOW is unavailable; identity checks are
+    defensive, not a full reparse-point isolation guarantee.
+    """
+    before = os.lstat(path)
+    if not stat.S_ISREG(before.st_mode):
+        raise OSError("object is not a regular file")
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags)
+    try:
+        opened = os.fstat(fd)
+        after = os.lstat(path)
+
+        def sig(st: os.stat_result) -> tuple[int, int]:
+            return (st.st_dev, st.st_ino)
+
+        if not stat.S_ISREG(opened.st_mode) or sig(before) != sig(opened) or sig(after) != sig(opened):
+            raise OSError("object changed while opening")
+        return os.fdopen(fd, "rb")
+    except BaseException:
+        os.close(fd)
+        raise
+
+
 def _file_matches(path: str, sha256: str, size: int) -> bool:
     try:
-        if os.path.getsize(path) != size:
-            return False
-        h = hashlib.sha256()
-        with open(path, "rb") as f:
+        with _open_regular(path) as f:
+            if os.fstat(f.fileno()).st_size != size:
+                return False
+            h = hashlib.sha256()
             for chunk in iter(lambda: f.read(1 << 20), b""):
                 h.update(chunk)
-    except FileNotFoundError:
+            # Catch a path swap or in-place size mutation during hashing.
+            opened, after = os.fstat(f.fileno()), os.lstat(path)
+            return (stat.S_ISREG(after.st_mode) and
+                    (opened.st_dev, opened.st_ino) == (after.st_dev, after.st_ino) and
+                    opened.st_size == size and h.hexdigest() == sha256)
+    except (OSError, ValueError):
         return False
-    return h.hexdigest() == sha256
 
 
 def _young(path: str, cutoff: float) -> bool:
@@ -148,6 +203,18 @@ def _young(path: str, cutoff: float) -> bool:
         return os.path.getmtime(path) > cutoff
     except FileNotFoundError:
         return True
+
+
+def _check_private_path(path: str, *, directory: bool) -> None:
+    """Inspect the final path without following a symlink; fail closed on POSIX.
+
+    This is a *deployment preflight*, not a hostile-parent-directory defence.
+    Parent directories and mount configuration must be controlled separately.
+    """
+    st = os.lstat(path)
+    expected = stat.S_ISDIR if directory else stat.S_ISREG
+    if not expected(st.st_mode) or st.st_uid != os.geteuid() or st.st_mode & 0o077:
+        raise PermissionError("private storage gate failed: %s" % path)
 
 
 class ObjectStore:
@@ -161,25 +228,88 @@ class ObjectStore:
         staging_dir: str | None = None,
         synchronous: str = "FULL",
         busy_timeout_ms: int = 5000,
+        enforce_private: bool = False,
+        coordinated: bool = False,
     ) -> None:
+        if type(coordinated) is not bool:
+            raise ValueError("coordinated must be bool")
+        if type(enforce_private) is not bool:
+            raise ValueError("enforce_private must be bool")
+        if enforce_private and os.name != "posix":
+            raise ValueError("enforce_private requires POSIX permission semantics")
         root = os.path.abspath(root)
-        self.objects_dir = os.path.join(root, "objects")
-        self.staging_dir = os.path.abspath(staging_dir) if staging_dir else os.path.join(root, "staging")
-        os.makedirs(self.objects_dir, exist_ok=True)
-        os.makedirs(self.staging_dir, exist_ok=True)
-        # A rename is only atomic within one filesystem. Refuse a staging area on
-        # another volume (e.g. /tmp on tmpfs) up front instead of failing with
-        # EXDEV per upload -- or worse, silently degrading to copy+delete.
-        durable.require_same_volume(self.staging_dir, self.objects_dir)
-        self.db_path = db_path or os.path.join(root, "safeforge.db")
-        self._conn = db.connect(self.db_path, synchronous=synchronous, busy_timeout_ms=busy_timeout_ms)
-        with db.transaction(self._conn):
-            for stmt in filter(None, (s.strip() for s in _SCHEMA.split(";"))):
-                self._conn.execute(stmt)
+        from . import coordination
+        if coordination.initialized(root) != coordinated:
+            raise IngestError("coordination mode mismatch; migrate/opt in explicitly")
+        if coordinated:
+            # The offline backup snapshots ONLY root/safeforge.db and root/staging.
+            # Arbitrary auxiliary paths would silently escape its inventory.
+            if db_path is not None and os.path.abspath(db_path) != os.path.join(root, 'safeforge.db'):
+                raise IngestError('coordinated mode requires database inside store root')
+            if staging_dir is not None and os.path.abspath(staging_dir) != os.path.join(root, 'staging'):
+                raise IngestError('coordinated mode requires canonical staging directory')
+        self._coordinated_lock = None
+        if coordinated:
+            # A live, long-lived store holds SH across *all* writes and
+            # reconciliation; EX offline backup fails until it is closed.
+            self._coordinated_lock = coordination.lock(root, exclusive=False)
+            self._coordinated_lock.__enter__()
+        try:
+            # R7: prevent an ordinary ObjectStore from using a failed or interrupted
+            # restore root; external clients bypassing this API are NOT protected.
+            if os.path.lexists(os.path.join(root, "RESTORE_IN_PROGRESS")):
+                raise IngestError("restore root is incomplete; do not open")
+            os.makedirs(root, mode=0o700, exist_ok=True)
+            if enforce_private:
+                # Reject an already-accessible root BEFORE touching child paths.
+                _check_private_path(root, directory=True)
+            self.objects_dir = os.path.join(root, "objects")
+            self.staging_dir = os.path.abspath(staging_dir) if staging_dir else os.path.join(root, "staging")
+            if enforce_private:
+                if os.path.dirname(self.staging_dir) != root:
+                    raise ValueError("enforce_private requires staging directly under root")
+                for directory in (self.objects_dir, self.staging_dir):
+                    if os.path.lexists(directory):
+                        _check_private_path(directory, directory=True)
+            os.makedirs(self.objects_dir, mode=0o700, exist_ok=True)
+            os.makedirs(self.staging_dir, mode=0o700, exist_ok=True)
+            # Publication must stay on one filesystem. Refuse a staging area on
+            # another volume (e.g. /tmp on tmpfs) up front instead of failing with
+            # EXDEV per upload -- or worse, silently degrading to copy+delete.
+            durable.require_same_volume(self.staging_dir, self.objects_dir)
+            self.db_path = db_path or os.path.join(root, "safeforge.db")
+            if enforce_private:
+                if os.path.abspath(os.path.dirname(self.db_path)) != root:
+                    raise ValueError("enforce_private requires the SQLite database directly under root")
+                for directory in (root, self.objects_dir, self.staging_dir):
+                    _check_private_path(directory, directory=True)
+                if not os.path.lexists(self.db_path):
+                    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+                    fd = os.open(self.db_path, flags, 0o600)
+                    os.close(fd)
+                _check_private_path(self.db_path, directory=False)
+            self._conn = db.connect(self.db_path, synchronous=synchronous,
+                                    busy_timeout_ms=busy_timeout_ms, coordinated=coordinated)
+            with db.transaction(self._conn):
+                for stmt in filter(None, (s.strip() for s in _SCHEMA.split(";"))):
+                    self._conn.execute(stmt)
+
+        except BaseException:
+            if hasattr(self, "_conn"):
+                self._conn.close()
+            if self._coordinated_lock is not None:
+                self._coordinated_lock.__exit__(None, None, None)
+                self._coordinated_lock = None
+            raise
 
     # -- plumbing -----------------------------------------------------------
     def close(self) -> None:
-        self._conn.close()
+        try:
+            self._conn.close()
+        finally:
+            if self._coordinated_lock is not None:
+                self._coordinated_lock.__exit__(None, None, None)
+                self._coordinated_lock = None
 
     def __enter__(self) -> ObjectStore:
         return self
@@ -216,10 +346,51 @@ class ObjectStore:
         """Path of a STORED object. Raises KeyError for anything else."""
         if not isinstance(oid, str) or not _ID_RE.fullmatch(oid) or self._status(oid) != "stored":
             raise KeyError(oid)
-        return self._obj(oid)
+        path = self._obj(oid)
+        # Path exposure does not imply content integrity: call verify() for that.
+        if os.path.islink(path) or not os.path.isfile(path):
+            raise KeyError(oid)
+        return path
 
     def status_of(self, oid: str) -> str | None:
         return self._status(oid)
+
+    def open_verified(self, oid: str):
+        """Return a binary file handle after SHA-256 verification.
+
+        Unlike path_of(), the caller reads from the same opened descriptor that
+        was verified. Do not grant other processes write access to object files:
+        the API cannot stop mutation of the same inode after verification.
+        The caller must close the returned handle.
+        """
+        if not isinstance(oid, str) or not _ID_RE.fullmatch(oid):
+            raise KeyError(oid)
+        row = self._conn.execute(
+            "SELECT sha256, size FROM objects WHERE id=? AND status='stored'", (oid,)
+        ).fetchone()
+        if row is None:
+            raise KeyError(oid)
+        try:
+            f = _open_regular(self._obj(oid))
+        except OSError as exc:
+            raise IngestError("stored object cannot be opened safely") from exc
+        try:
+            sha, size = row
+            if os.fstat(f.fileno()).st_size != size:
+                raise IngestError("stored object has unexpected size")
+            h = hashlib.sha256()
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+            opened, after = os.fstat(f.fileno()), os.lstat(self._obj(oid))
+            if ((opened.st_dev, opened.st_ino) != (after.st_dev, after.st_ino)
+                    or not stat.S_ISREG(after.st_mode) or opened.st_size != size
+                    or h.hexdigest() != sha):
+                raise IngestError("stored object digest or identity mismatch")
+            f.seek(0)
+            return f
+        except BaseException:
+            f.close()
+            raise
 
     def ingest(
         self,
@@ -246,7 +417,18 @@ class ObjectStore:
         if idempotency_key is not None:
             hit = self._by_key(idempotency_key)
             if hit is not None:
-                return self._dedup(hit, expected_sha256)
+                # Pending replays must not steal or consume an in-flight upload.
+                if hit[1] != "stored":
+                    raise IngestInFlight("ingest for this idempotency key is still pending")
+                if hit[3] > max_bytes:
+                    raise TooLarge("existing object exceeds max_bytes=%d" % max_bytes)
+                # Never trust a reused idempotency key as proof of identical bytes.
+                observed_sha, observed_size = _bounded_digest(stream, max_bytes, chunk_size)
+                if expected_sha256 is not None and observed_sha != expected_sha256:
+                    raise DigestMismatch("replayed stream differs from expected_sha256")
+                if observed_size != hit[3]:
+                    raise IdempotencyConflict("idempotency key reused for different content size")
+                return self._dedup(hit, observed_sha)
 
         oid = uuid.uuid4().hex
         spath, opath = self._stg(oid), self._obj(oid)
@@ -255,7 +437,9 @@ class ObjectStore:
         h = hashlib.sha256()
         size = 0
         try:
-            with open(spath, "xb") as f:
+            # Restrict newly staged object bytes irrespective of process umask.
+            stage_fd = os.open(spath, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(stage_fd, "wb") as f:
                 _faults.point("staging.opened")
                 while True:
                     chunk = stream.read(chunk_size)
@@ -328,6 +512,8 @@ class ObjectStore:
             raise IdempotencyConflict("idempotency key already used for different content")
         if status != "stored":
             raise IngestInFlight("ingest for this idempotency key is still pending")
+        if not _file_matches(self._obj(oid), sha, size):
+            raise IngestError("cannot acknowledge a missing or corrupted stored object")
         return IngestResult(oid, sha, size, True)
 
     def _abort(self, oid: str) -> None:
@@ -344,13 +530,19 @@ class ObjectStore:
         except Exception:  # noqa: BLE001 -- the original error is what the caller must see
             pass  # the reconciler resolves whatever is left
 
-    def reconcile(self, *, grace_seconds: float = 300.0, now: float | None = None) -> ReconcileReport:
+    def reconcile(
+        self, *, grace_seconds: float = 300.0, now: float | None = None,
+        verify_stored_digests: bool = False,
+    ) -> ReconcileReport:
         """Bring disk and database back into agreement. Idempotent.
 
         ``grace_seconds`` protects in-flight ingests: young 'pending' rows and
         young unreferenced files are left alone. Correctness does NOT depend on
         the grace period (the final UPDATE is conditional); it only avoids
         failing uploads that are merely slow.
+
+        By default stored objects get a cheap existence + size check. Set
+        verify_stored_digests=True for an O(total stored bytes) SHA-256 audit.
         """
         if (
             not isinstance(grace_seconds, (int, float))
@@ -359,7 +551,11 @@ class ObjectStore:
             or grace_seconds < 0
         ):
             raise ValueError("grace_seconds must be a finite number >= 0")
+        if type(verify_stored_digests) is not bool:
+            raise ValueError("verify_stored_digests must be bool")
         now = time.time() if now is None else now
+        if isinstance(now, bool) or not isinstance(now, (int, float)) or not math.isfinite(now):
+            raise ValueError("now must be a finite numeric timestamp")
         cutoff = now - grace_seconds
         rep = ReconcileReport()
 
@@ -388,7 +584,7 @@ class ObjectStore:
         # (b) objects/: delete files of failed rows and old unreferenced files.
         for name in sorted(os.listdir(self.objects_dir)):
             path = os.path.join(self.objects_dir, name)
-            if not _ID_RE.fullmatch(name) or not os.path.isfile(path):
+            if not _ID_RE.fullmatch(name) or os.path.islink(path) or not os.path.isfile(path):
                 rep.foreign.append(path)  # never delete what we did not create
                 continue
             st = self._status(name)
@@ -405,7 +601,7 @@ class ObjectStore:
         for name in sorted(os.listdir(self.staging_dir)):
             path = os.path.join(self.staging_dir, name)
             oid = name[: -len(_PART)] if name.endswith(_PART) else ""
-            if not _ID_RE.fullmatch(oid) or not os.path.isfile(path):
+            if not _ID_RE.fullmatch(oid) or os.path.islink(path) or not os.path.isfile(path):
                 rep.foreign.append(path)
                 continue
             st = self._status(oid)
@@ -423,8 +619,12 @@ class ObjectStore:
             "SELECT id, size FROM objects WHERE status='stored'"
         ).fetchall():
             p = self._obj(oid)
-            if not os.path.isfile(p) or os.path.getsize(p) != size:
+            if (os.path.islink(p) or not os.path.isfile(p) or os.path.getsize(p) != size):
                 rep.missing_or_corrupt.append(oid)
+            elif verify_stored_digests:
+                row = self._conn.execute("SELECT sha256 FROM objects WHERE id=?", (oid,)).fetchone()
+                if row is not None and not _file_matches(p, row[0], size):
+                    rep.missing_or_corrupt.append(oid)
         return rep
 
     def verify(self) -> list[str]:

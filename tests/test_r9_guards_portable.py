@@ -86,13 +86,30 @@ def hold(monkeypatch):
     return _hold
 
 
+def _connect_while_held(root):
+    """Positive control as an ASSERTION: a rejection here means the guard does not
+    see what lock() registered (e.g. a different registry key)."""
+    try:
+        return connect(str(root / "safeforge.db"), coordinated=True)
+    except CoordinationRejected as exc:
+        raise AssertionError(f"rejected although lock() is held: {exc}") from exc
+
+
+def _is_held(root) -> bool:
+    try:
+        require_held(root)
+    except CoordinationRejected:
+        return False
+    return True
+
+
 def test_r9_01_coordinated_connect_needs_live_registry_entry(tmp_path, hold):
     root = _marked_root(tmp_path)
     with pytest.raises(CoordinationRejected, match="live lock"):
         connect(str(root / "safeforge.db"), coordinated=True)
     # Positive control: the same call succeeds while held.
     with hold(root):
-        con = connect(str(root / "safeforge.db"), coordinated=True)
+        con = _connect_while_held(root)
         try:
             assert con.execute("SELECT count(*) FROM objects").fetchone()[0] == 1
         finally:
@@ -104,7 +121,7 @@ def test_r9_01_coordinated_connect_needs_live_registry_entry(tmp_path, hold):
 def test_r9_02_connection_and_cursor_recheck_after_release(tmp_path, hold):
     root = _marked_root(tmp_path)
     with hold(root):
-        con = connect(str(root / "safeforge.db"), coordinated=True)
+        con = _connect_while_held(root)
         cur = con.cursor()
         assert cur.execute("SELECT count(*) FROM objects").fetchone()[0] == 1
     try:
@@ -121,7 +138,7 @@ def test_r9_03_authorizer_denies_native_execute_after_release(tmp_path, hold):
     root = _marked_root(tmp_path)
     sql = "SELECT count(*) FROM objects"
     with hold(root):
-        con = connect(str(root / "safeforge.db"), coordinated=True)
+        con = _connect_while_held(root)
         # Prepared while held: a statement cache would let it run again later.
         assert sqlite3.Connection.execute(con, sql).fetchone()[0] == 1
     try:
@@ -163,9 +180,13 @@ def test_r9_06_registry_from_another_pid_is_discarded(tmp_path, monkeypatch, hol
 def test_r9_nested_hold_survives_inner_release(tmp_path, hold):
     """lock()'s reference count: closing an inner context must not drop the outer one."""
     root = _marked_root(tmp_path)
-    with hold(root):
+    seen = {}
+    try:
         with hold(root):
-            require_held(root)
-        require_held(root)  # outer context still live
-    with pytest.raises(CoordinationRejected, match="live lock"):
-        require_held(root)
+            with hold(root):
+                seen["inner"] = _is_held(root)
+            seen["outer_after_inner_closed"] = _is_held(root)
+    except KeyError as exc:  # recorded, then asserted: an early delete corrupts lock()'s own exit
+        seen["exit_error"] = repr(exc)
+    assert seen == {"inner": True, "outer_after_inner_closed": True}
+    assert not _is_held(root)

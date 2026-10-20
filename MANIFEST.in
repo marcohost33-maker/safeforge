@@ -1,0 +1,8 @@
+# The sdist must be able to run its own test suite. setuptools' default sdist
+# only picks up tests/test_*.py; the suite also needs tests/__init__.py,
+# conftest.py (crash fixtures), crash_driver.py (run as `python -m
+# tests.crash_driver`), invariants.py and the negative-control designs/.
+graft tests
+graft docs
+include CHANGELOG.md SECURITY.md
+global-exclude __pycache__ *.py[cod]

@@ -50,6 +50,15 @@ tests are process kills.
   They now run the real `coordination.lock()` with only flock and the POSIX
   ownership/marker checks stubbed, and add a nested-lock test.
 
+### Packaging
+- `MANIFEST.in`: the sdist now ships the test support files
+  (`tests/__init__.py`, `conftest.py`, `crash_driver.py`, `invariants.py`,
+  `tests/designs/`), `docs/`, `CHANGELOG.md` and `SECURITY.md`. Before, its
+  tests did not collect (3 collection errors, exit code 2); now pytest inside
+  the unpacked sdist runs 225 passed, 47 skipped (Windows, CPython 3.12), the
+  same as the checkout. `experiments/` stays out (not needed by the tests).
+  The wheel is unchanged. `tests/test_packaging_manifest.py` checks the rule.
+
 ### Known limits
 - Verified locally on Windows (Python 3.12) only. Linux results come from the
   reviewer's synthetic checkout; macOS was never run. The Linux-only R8/R9

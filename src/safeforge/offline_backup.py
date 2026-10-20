@@ -149,7 +149,10 @@ def backup_offline(source_root: str | os.PathLike, destination: str | os.PathLik
                 raise BackupRejected("could not checkpoint and seal SQLite backup")
         os.chmod(target_db, 0o600)
         dbsha, dbsize = _hash_file(target_db)
-        with open(target_db, "rb") as f:
+        # "r+b", not "rb": on Windows os.fsync (_commit/FlushFileBuffers) needs a
+        # handle with write access and fails with EBADF on a read-only one.
+        # "r+b" neither creates nor truncates; POSIX accepts either mode.
+        with open(target_db, "r+b") as f:
             os.fsync(f.fileno())
         for entry in expected:
             _file_copy_verified(src / "objects" / entry["id"], objects / entry["id"],

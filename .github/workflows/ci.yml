@@ -32,7 +32,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        # macOS: the only POSIX-but-not-Linux runner. coordination (flock) is
+        # available there while atomic_restore (renameat2) refuses, and the
+        # Linux-gated R8/R9 tests skip -- that branch combination is otherwise
+        # never executed. Not a support claim (see pyproject classifiers).
+        os: [ubuntu-latest, windows-latest, macos-latest]
         python: ["3.12", "3.13"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

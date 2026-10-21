@@ -2,11 +2,11 @@
   "env": {
     "cpu_count": 4,
     "git_dirty": false,
-    "git_head": "ab715c1871ef75cb626f9eda0dd842c1f1c173ed",
+    "git_head": "5b0243be6446bbb0484a4860397a69c3afe9b82b",
     "platform": "Linux-6.18.44-fc-v140-x86_64-with-glibc2.39",
     "python": "3.13.16",
     "sqlite": "3.45.1",
-    "utc": "2026-10-21T11:19:05Z"
+    "utc": "2026-10-21T11:21:40Z"
   },
   "euid": 0,
   "mutants": [
@@ -141,7 +141,8 @@
     {
       "killed": true,
       "killed_by": [
-        "test_root_foreign_owner_rejected"
+        "test_root_foreign_owner_rejected[chown]",
+        "test_root_foreign_owner_rejected[stat-shim]"
       ],
       "mutant": "root-owner"
     },
@@ -154,7 +155,7 @@
     }
   ],
   "restore_green": true,
-  "seconds": 22.4,
+  "seconds": 20.6,
   "survived": [],
   "tests": [
     "tests/test_r11_coordination_forgers.py",

@@ -1,12 +1,12 @@
 {
   "env": {
     "cpu_count": 4,
-    "git_dirty": true,
-    "git_head": "9a8c7fec9abec4c8769267139eff546363f1d2f4",
+    "git_dirty": false,
+    "git_head": "8be4ed596c80049eba8c6530457dfb1b81f9d0ef",
     "platform": "Linux-6.18.44-fc-v140-x86_64-with-glibc2.39",
     "python": "3.13.16",
     "sqlite": "3.45.1",
-    "utc": "2026-10-21T11:57:04Z"
+    "utc": "2026-10-21T12:00:16Z"
   },
   "euid": 0,
   "mutants": [
@@ -281,7 +281,7 @@
     }
   ],
   "restore_green": true,
-  "seconds": 53.4,
+  "seconds": 52.1,
   "survived": [],
   "tests": [
     "tests/test_r11_coordination_forgers.py",

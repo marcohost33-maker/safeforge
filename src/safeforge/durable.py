@@ -32,6 +32,7 @@ from . import _faults
 
 __all__ = [
     "CrossDeviceError",
+    "fsync_fd",
     "fsync_file",
     "fsync_dir",
     "publish",
@@ -43,26 +44,50 @@ class CrossDeviceError(OSError):
     """Source and destination are on different volumes; atomic publication is impossible."""
 
 
-def fsync_file(f: IO[bytes]) -> None:
-    """Flush Python buffers and force the file's data to stable storage."""
+def fsync_fd(fd: int) -> str:
+    """Force ``fd``'s data to stable storage; returns ``"ok"`` or ``"degraded:<reason>"``.
+
+    macOS: fsync(2) "will flush all data from the host to the drive", but the
+    drive may keep it in its cache; Apple's man page points to F_FULLFSYNC for
+    data that must survive power loss, and CPython's os.fsync does not issue it
+    (bpo-3512 / bpo-11877). R12: use F_FULLFSYNC there, as SQLite (PRAGMA
+    fullfsync), RocksDB and Rust's ``File::sync_all`` do, and fall back to
+    fsync like SQLite does when the filesystem refuses it -- but say so instead
+    of reporting a plain "ok".
+    """
+    if sys.platform == "darwin":
+        import fcntl
+
+        try:
+            fcntl.fcntl(fd, fcntl.F_FULLFSYNC)
+            return "ok"
+        except OSError:
+            os.fsync(fd)
+            return "degraded:darwin-F_FULLFSYNC-refused-fsync-only"
+    os.fsync(fd)
+    return "ok"
+
+
+def fsync_file(f: IO[bytes]) -> str:
+    """Flush Python buffers and force the file's data to stable storage (see :func:`fsync_fd`)."""
     f.flush()
-    os.fsync(f.fileno())
+    return fsync_fd(f.fileno())
 
 
 def fsync_dir(path: str) -> str:
     """fsync a directory so that entries created/renamed in it become durable.
 
-    Returns ``"ok"`` or ``"unsupported:<reason>"`` (Windows). Never silently
+    Returns ``"ok"``, ``"degraded:<reason>"`` (macOS without F_FULLFSYNC, see
+    :func:`fsync_fd`) or ``"unsupported:<reason>"`` (Windows). Never silently
     skips: the caller receives the status and can surface it.
     """
     if sys.platform == "win32":
         return "unsupported:windows-has-no-directory-fsync"
     fd = os.open(path, os.O_RDONLY)
     try:
-        os.fsync(fd)
+        return fsync_fd(fd)
     finally:
         os.close(fd)
-    return "ok"
 
 
 def _device(path: str) -> int:

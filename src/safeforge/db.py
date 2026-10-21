@@ -10,6 +10,9 @@ Defaults and why:
   following a power loss or system crash" (sqlite.org/pragma.html). An ingest
   that acknowledges an upload must not lose that acknowledgement, so FULL is
   the default. NORMAL is allowed but must be requested explicitly.
+* ``fullfsync=ON`` on macOS with FULL/EXTRA -- there fsync(2) does not flush
+  the drive's cache; only F_FULLFSYNC does, and SQLite uses it only with this
+  pragma. NORMAL keeps SQLite's default (it does not promise durability).
 * ``busy_timeout`` -- waits for a lock instead of failing at once. It does NOT
   remove SQLITE_BUSY: SQLite skips the busy handler when waiting could
   deadlock (read->write upgrade), and any finite timeout can expire.
@@ -23,6 +26,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 
@@ -161,6 +165,13 @@ def connect(
         got = conn.execute("PRAGMA synchronous").fetchone()[0]
         if got != _SYNC[sync]:
             raise ConfigurationError("synchronous=%s not applied (got %r)" % (sync, got))
+        if sys.platform == "darwin" and sync != "NORMAL":
+            # R12: on macOS FULL/EXTRA are not power-loss durable without
+            # F_FULLFSYNC, which SQLite issues only with fullfsync=ON (default
+            # OFF). With fullfsync on, checkpoint_fullfsync is implied.
+            conn.execute("PRAGMA fullfsync=ON")
+            if conn.execute("PRAGMA fullfsync").fetchone()[0] != 1:
+                raise ConfigurationError("fullfsync=ON not applied")
         conn.execute("PRAGMA foreign_keys=ON")
     except BaseException:
         conn.close()

@@ -14,7 +14,7 @@ import tempfile
 from pathlib import Path
 
 from . import durable
-from .offline_backup import BackupRejected, _durability, restore_offline
+from .offline_backup import BackupRejected, _durability, _inside, restore_offline
 
 RENAME_NOREPLACE = 1
 AT_FDCWD = -100
@@ -50,7 +50,7 @@ def restore_atomic(backup: str | os.PathLike, new_root: str | os.PathLike,
         raise BackupRejected('explicit quiescence confirmation required')
     destination = Path(new_root).absolute()
     source = Path(backup).absolute()
-    if destination == source or os.path.commonpath((str(source), str(destination))) == str(source):
+    if _inside(destination, source):
         raise BackupRejected('restore target cannot be inside backup')
     if os.path.lexists(destination):
         raise FileExistsError(errno.EEXIST, 'restore destination already exists', str(destination))
@@ -70,7 +70,7 @@ def restore_atomic(backup: str | os.PathLike, new_root: str | os.PathLike,
         syncs.append(durable.fsync_dir(str(parent)))
         return {**report, 'verdict': 'atomic_restore_published_linux',
                 'publication': 'renameat2_RENAME_NOREPLACE',
-                **_durability(syncs)}
+                **_durability(syncs, [report['file_fsync']])}
     finally:
         if workspace.exists():
             # Never delete the published destination; leftover workspace is

@@ -13,6 +13,8 @@ import threading
 from contextlib import contextmanager
 from pathlib import Path
 
+from . import durable
+
 MODE = ".safeforge-coordinated-v1"
 LOCK = ".safeforge-coordination.lock"
 MARKER_CONTENT = b"R8 cooperative POSIX-only; raw writes are not fenced\n"
@@ -66,9 +68,9 @@ def _check_marker(root: Path) -> None:
     marker = root / MODE
     try:
         st = os.lstat(marker)
-        if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1 or st.st_uid != os.getuid() or (st.st_mode & 0o077):
+        if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1 or st.st_uid != os.geteuid() or (st.st_mode & 0o077):
             raise CoordinationRejected("invalid coordination marker metadata")
-        fd = os.open(marker, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        fd = os.open(marker, os.O_RDONLY | os.O_NOFOLLOW)
         try:
             opened = os.fstat(fd)
             if (opened.st_dev, opened.st_ino) != (st.st_dev, st.st_ino):
@@ -93,6 +95,10 @@ class CoordinationRejected(RuntimeError):
 def _fcntl():
     if os.name != "posix":
         raise CoordinationRejected("POSIX flock is required; no Windows guarantee")
+    # R12 (SF-P2-02): the marker and lock opens rely on O_NOFOLLOW. A platform
+    # without it must refuse, not open with a silently weaker flag set.
+    if not hasattr(os, "O_NOFOLLOW"):
+        raise CoordinationRejected("O_NOFOLLOW is required for coordination")
     import fcntl
 
     return fcntl
@@ -106,13 +112,19 @@ def _regular_fd(root: Path) -> int:
     except OSError as exc:
         # R11 (SF-R11-01): symlink (ELOOP) or directory (EISDIR) in place of the lock.
         raise CoordinationRejected("lock must be a regular file") from exc
-    mode = os.fstat(fd).st_mode
-    if not stat.S_ISREG(mode):
+    st = os.fstat(fd)
+    if not stat.S_ISREG(st.st_mode):
         os.close(fd)
         raise CoordinationRejected("lock must be a regular file")
-    if os.fstat(fd).st_nlink != 1:
+    if st.st_nlink != 1:
         os.close(fd)
         raise CoordinationRejected("lock must not have extra hard links")
+    # R12: the same owner/mode rule as the marker. Only reachable on POSIX in
+    # production (_fcntl refuses elsewhere); the guard keeps the portable,
+    # OS-stubbed tests running on Windows, which has no geteuid.
+    if os.name == "posix" and (st.st_uid != os.geteuid() or st.st_mode & 0o077):
+        os.close(fd)
+        raise CoordinationRejected("lock must be owned by us and mode 0600 or stricter")
     return fd
 
 
@@ -120,7 +132,7 @@ def _private_root(root: Path) -> None:
     if root.is_symlink() or not root.is_dir():
         raise CoordinationRejected("source root must be a real directory")
     st = root.stat()
-    if (st.st_mode & 0o077) or st.st_uid != os.getuid():
+    if (st.st_mode & 0o077) or st.st_uid != os.geteuid():
         raise CoordinationRejected("coordinated source root must be owned and mode 0700 or stricter")
 
 
@@ -143,14 +155,10 @@ def initialize(root: str | os.PathLike, *, externally_quiescent: bool = False) -
             fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
             try:
                 os.write(fd, MARKER_CONTENT)
-                os.fsync(fd)
+                durable.fsync_fd(fd)
             finally:
                 os.close(fd)
-            dfd = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-            try:
-                os.fsync(dfd)
-            finally:
-                os.close(dfd)
+            durable.fsync_dir(str(path))
         _check_marker(path)
 
 

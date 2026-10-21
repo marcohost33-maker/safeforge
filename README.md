@@ -34,6 +34,12 @@ POSIX rename) run only in CI. Nothing here has been audited externally.
   documents as "does not return until the file is actually moved on the
   disk". Microsoft documents no atomicity guarantee for it. The result reports
   `dir_sync = "unsupported:…"` instead of hiding this.
+- **macOS needs F_FULLFSYNC.** Apple's fsync(2) flushes to the drive, not
+  through its cache, and CPython's `os.fsync` does not issue `F_FULLFSYNC`.
+  `durable` issues it (falling back to fsync with status
+  `"degraded:darwin-F_FULLFSYNC-refused-fsync-only"`), and `db.connect` sets
+  SQLite's `PRAGMA fullfsync=ON` for FULL/EXTRA. Drives or bridges that ignore
+  the flush command cannot be detected from software.
 - **No content scanning.** A structurally valid archive can still carry
   malicious JavaScript. Serve uploads from a separate origin with a strict CSP.
 - **"Exactly once" only inside the database transaction.** External side

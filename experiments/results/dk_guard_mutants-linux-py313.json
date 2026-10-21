@@ -1,12 +1,12 @@
 {
   "env": {
     "cpu_count": 4,
-    "git_dirty": false,
-    "git_head": "5b0243be6446bbb0484a4860397a69c3afe9b82b",
+    "git_dirty": true,
+    "git_head": "c52a7b195c5fb6d79577afc1eb2559dff7aad554",
     "platform": "Linux-6.18.44-fc-v140-x86_64-with-glibc2.39",
     "python": "3.13.16",
     "sqlite": "3.45.1",
-    "utc": "2026-10-21T11:21:40Z"
+    "utc": "2026-10-21T11:48:28Z"
   },
   "euid": 0,
   "mutants": [
@@ -32,6 +32,13 @@
         "test_marker_foreign_owner_rejected[lstat-shim]"
       ],
       "mutant": "marker-owner"
+    },
+    {
+      "killed": true,
+      "killed_by": [
+        "test_ownership_is_checked_against_the_effective_uid"
+      ],
+      "mutant": "marker-owner-real-uid"
     },
     {
       "killed": true,
@@ -76,6 +83,20 @@
     {
       "killed": true,
       "killed_by": [
+        "test_marker_changed_after_flock_rejected_by_second_check"
+      ],
+      "mutant": "marker-recheck-after-flock"
+    },
+    {
+      "killed": true,
+      "killed_by": [
+        "test_missing_o_nofollow_refuses_instead_of_weakening"
+      ],
+      "mutant": "nofollow-required"
+    },
+    {
+      "killed": true,
+      "killed_by": [
         "test_lock_symlink_rejected_at_open"
       ],
       "mutant": "lock-nofollow"
@@ -105,16 +126,25 @@
     {
       "killed": true,
       "killed_by": [
-        "test_lock_replaced_after_open_rejected"
+        "test_lock_file_foreign_owner_rejected[chown]",
+        "test_lock_file_foreign_owner_rejected[fstat-shim]"
       ],
-      "mutant": "lock-replaced-after-flock"
+      "mutant": "lock-owner"
     },
     {
       "killed": true,
       "killed_by": [
-        "test_marker_changed_after_flock_rejected_by_second_check"
+        "test_lock_file_group_or_other_bits_rejected[416]",
+        "test_lock_file_group_or_other_bits_rejected[388]"
       ],
-      "mutant": "marker-recheck-after-flock"
+      "mutant": "lock-mode"
+    },
+    {
+      "killed": true,
+      "killed_by": [
+        "test_lock_replaced_after_open_rejected"
+      ],
+      "mutant": "lock-replaced-after-flock"
     },
     {
       "killed": true,
@@ -149,16 +179,83 @@
     {
       "killed": true,
       "killed_by": [
-        "test_lock_on_one_store_does_not_unlock_another_through_dotdot_alias"
+        "test_lock_on_one_store_does_not_unlock_another_through_dotdot_alias",
+        "test_uncoordinated_connect_through_dotdot_alias_is_refused"
       ],
       "mutant": "connect-lexical-parent"
+    },
+    {
+      "killed": true,
+      "killed_by": [
+        "test_backup_into_source_through_symlink_is_rejected",
+        "test_restore_into_backup_through_symlink_is_rejected_and_backup_stays_valid",
+        "test_atomic_restore_into_backup_through_symlink_is_rejected"
+      ],
+      "mutant": "containment-lexical"
+    },
+    {
+      "killed": true,
+      "killed_by": [
+        "test_other_drive_is_disjoint_not_an_error"
+      ],
+      "mutant": "containment-other-drive"
+    },
+    {
+      "killed": true,
+      "killed_by": [
+        "test_darwin_fsync_uses_f_fullfsync_and_reports_fallback[False]",
+        "test_darwin_fsync_uses_f_fullfsync_and_reports_fallback[True]"
+      ],
+      "mutant": "darwin-fullfsync"
+    },
+    {
+      "killed": true,
+      "killed_by": [
+        "test_darwin_fsync_uses_f_fullfsync_and_reports_fallback[True]"
+      ],
+      "mutant": "darwin-fallback-says-ok"
+    },
+    {
+      "killed": true,
+      "killed_by": [
+        "test_connect_sets_sqlite_fullfsync_on_macos[darwin-FULL-1]",
+        "test_connect_sets_sqlite_fullfsync_on_macos[darwin-EXTRA-1]"
+      ],
+      "mutant": "sqlite-fullfsync"
+    },
+    {
+      "killed": true,
+      "killed_by": [
+        "test_one_unsupported_dir_sync_is_never_reported_as_ok[0]",
+        "test_one_unsupported_dir_sync_is_never_reported_as_ok[1]",
+        "test_one_unsupported_dir_sync_is_never_reported_as_ok[2]",
+        "test_restore_reports_unsupported_dir_sync",
+        "test_atomic_restore_keeps_an_inner_unsupported_status"
+      ],
+      "mutant": "report-dir-syncs-dropped"
+    },
+    {
+      "killed": true,
+      "killed_by": [
+        "test_report_surfaces_degraded_file_fsync"
+      ],
+      "mutant": "report-file-syncs-dropped"
+    },
+    {
+      "killed": true,
+      "killed_by": [
+        "test_nested_summary_is_not_duplicated"
+      ],
+      "mutant": "report-nested-split"
     }
   ],
   "restore_green": true,
-  "seconds": 20.6,
+  "seconds": 47.6,
   "survived": [],
   "tests": [
     "tests/test_r11_coordination_forgers.py",
-    "tests/test_r9_context_attestation.py"
+    "tests/test_r9_context_attestation.py",
+    "tests/test_r12_hardening.py",
+    "tests/test_r11_durability_report.py"
   ]
 }

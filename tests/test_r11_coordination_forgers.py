@@ -69,12 +69,14 @@ def test_positive_control_valid_store_is_accepted(tmp_path):
 
 # -- marker ------------------------------------------------------------------
 
-def test_marker_socket_rejected_by_type_check(tmp_path):
+def test_marker_socket_rejected_by_type_check(tmp_path, monkeypatch):
     # nlink 1, our uid, mode 0600: only S_ISREG distinguishes it from a marker.
     root = mkroot(tmp_path)
     (root / MODE).unlink()
+    # Bind by a relative name: sun_path holds ~107 bytes, a deep basetemp does not fit.
+    monkeypatch.chdir(root)
     with socket.socket(socket.AF_UNIX) as sock:
-        sock.bind(str(root / MODE))
+        sock.bind(MODE)
         os.chmod(root / MODE, 0o600)
         rejected(root, "marker metadata")
 

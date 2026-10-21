@@ -26,16 +26,40 @@ class BackupRejected(RuntimeError):
     """A backup/restore invariant was not met. Never treat partial output as ready."""
 
 
-def _durability(dir_syncs: list[str]) -> dict:
-    """What the directory fsyncs actually did, for the caller to see (R11, SF-P2-01).
+def _summary(statuses: list[str]) -> str:
+    # Inputs may already be summaries ("a;b") from a nested report.
+    failed = sorted({part for s in statuses for part in s.split(";") if part != "ok"})
+    return "ok" if not failed else ";".join(failed)
 
-    ``durable.fsync_dir`` returns ``"unsupported:..."`` on Windows. The backup
-    still passes its integrity check there, but its directory entries were never
-    forced to disk; a report that only says "pass" would hide that.
+
+def _durability(dir_syncs: list[str], file_syncs: list[str]) -> dict:
+    """What the fsyncs actually did, for the caller to see (R11 SF-P2-01, R12).
+
+    ``durable.fsync_dir`` returns ``"unsupported:..."`` on Windows, and both
+    fsyncs return ``"degraded:..."`` on macOS when F_FULLFSYNC is refused. The
+    backup still passes its integrity check then, but it was not forced to
+    stable storage; a report that only says "pass" would hide that.
     """
-    failed = sorted({s for s in dir_syncs if s != "ok"})
-    return {"directory_fsync": "ok" if not failed else ";".join(failed),
+    return {"directory_fsync": _summary(dir_syncs), "file_fsync": _summary(file_syncs),
             "power_loss_verified": False}
+
+
+def _inside(child: Path, parent: Path) -> bool:
+    """True if ``child`` is ``parent`` or below it, as the kernel resolves both.
+
+    R12 (SF-R12-01): the checks compared ``Path.absolute()`` spellings, so
+    ``x/../store/bk`` or a symlink into the store passed "destination must be
+    outside source root" and a backup landed inside the live store (a restore
+    likewise inside its backup, which then no longer verifies). realpath
+    resolves symlinks and ".." of the existing part; a missing tail stays
+    lexical, which is exact for a path that does not exist yet. Different
+    Windows drives make commonpath raise ValueError: then they are disjoint.
+    """
+    c, p = os.path.realpath(child), os.path.realpath(parent)
+    try:
+        return os.path.commonpath((c, p)) == p
+    except ValueError:
+        return False
 
 
 def _check_confirmation(confirmed_quiescent: bool) -> None:
@@ -53,7 +77,7 @@ def _hash_file(path: Path) -> tuple[str, int]:
     return digest.hexdigest(), size
 
 
-def _file_copy_verified(src: Path, dst: Path, expected_sha: str, expected_size: int) -> None:
+def _file_copy_verified(src: Path, dst: Path, expected_sha: str, expected_size: int) -> str:
     # Hash the SOURCE descriptor while streaming, never a pathname reopened for copy.
     h = hashlib.sha256()
     size = 0
@@ -66,10 +90,10 @@ def _file_copy_verified(src: Path, dst: Path, expected_sha: str, expected_size: 
                     raise BackupRejected("object exceeded expected size during copy")
                 h.update(chunk)
                 out.write(chunk)
-            out.flush()
-            os.fsync(out.fileno())
+            synced = durable.fsync_file(out)
     if size != expected_size or h.hexdigest() != expected_sha:
         raise BackupRejected("object checksum or size mismatch while copying")
+    return synced
     if not _file_matches(str(src), expected_sha, expected_size):
         raise BackupRejected("source object changed or disappeared during copying")
 
@@ -105,12 +129,11 @@ def _list_regular_names(path: Path) -> set[str]:
     return result
 
 
-def _write_sync(path: Path, payload: bytes) -> None:
+def _write_sync(path: Path, payload: bytes) -> str:
     with open(path, "xb") as f:
         os.chmod(path, 0o600)
         f.write(payload)
-        f.flush()
-        os.fsync(f.fileno())
+        return durable.fsync_file(f)
 
 
 def _canonical_json(value: dict) -> bytes:
@@ -127,7 +150,7 @@ def backup_offline(source_root: str | os.PathLike, destination: str | os.PathLik
     """
     _check_confirmation(confirmed_quiescent)
     src, dst = Path(source_root).absolute(), Path(destination).absolute()
-    if src == dst or os.path.commonpath((str(src), str(dst))) == str(src):
+    if _inside(dst, src):
         raise BackupRejected("backup destination must be outside source root")
     if src.is_symlink() or not src.is_dir():
         raise BackupRejected("source root must be a real directory")
@@ -165,10 +188,10 @@ def backup_offline(source_root: str | os.PathLike, destination: str | os.PathLik
         # handle with write access and fails with EBADF on a read-only one.
         # "r+b" neither creates nor truncates; POSIX accepts either mode.
         with open(target_db, "r+b") as f:
-            os.fsync(f.fileno())
+            file_syncs = [durable.fsync_file(f)]
         for entry in expected:
-            _file_copy_verified(src / "objects" / entry["id"], objects / entry["id"],
-                                entry["sha256"], entry["size"])
+            file_syncs.append(_file_copy_verified(src / "objects" / entry["id"], objects / entry["id"],
+                                                  entry["sha256"], entry["size"]))
         if read.execute("PRAGMA data_version").fetchone()[0] != v_before or _rows(read) != expected:
             raise BackupRejected("source DB modified during backup")
         if (_list_regular_names(src / "staging") or
@@ -184,13 +207,13 @@ def backup_offline(source_root: str | os.PathLike, destination: str | os.PathLik
         manifest = {"schema": _SCHEMA, "database_sha256": dbsha, "database_size": dbsize,
                     "objects": expected, "writer_quiescence": "operator_attested_not_verified_by_library"}
         material = _canonical_json(manifest)
-        _write_sync(dst / "manifest.json", material)
+        file_syncs.append(_write_sync(dst / "manifest.json", material))
         syncs = [durable.fsync_dir(str(objects))]
         # COMPLETE is the LAST action; orphan/incomplete dirs never validate.
-        _write_sync(dst / "COMPLETE", hashlib.sha256(material).hexdigest().encode("ascii") + b"\n")
+        file_syncs.append(_write_sync(dst / "COMPLETE", hashlib.sha256(material).hexdigest().encode("ascii") + b"\n"))
         syncs.append(durable.fsync_dir(str(dst)))
         syncs.append(durable.fsync_dir(str(dst.parent)))
-        return {**verify_backup(dst), **_durability(syncs)}
+        return {**verify_backup(dst), **_durability(syncs, file_syncs)}
     finally:
         read.close()
 
@@ -256,23 +279,23 @@ def restore_offline(backup: str | os.PathLike, new_root: str | os.PathLike,
     checked, m, verified_material = _verify_backup_and_manifest(backup)
     source = Path(backup).absolute()
     target = Path(new_root).absolute()
-    if os.path.commonpath((str(source), str(target))) == str(source):
+    if _inside(target, source):
         raise BackupRejected("restore root must be outside backup")
     os.mkdir(target, 0o700)
     # An incomplete restore is not a usable ObjectStore. The marker is checked
     # by ObjectStore's constructor. It is removed ONLY after verified sync.
     # NOTE: not atomic with mkdir; an untrusted concurrent process can race.
-    _write_sync(target / "RESTORE_IN_PROGRESS", b"restore must finish before opening this store\n")
+    file_syncs = [_write_sync(target / "RESTORE_IN_PROGRESS", b"restore must finish before opening this store\n")]
     os.mkdir(target / "objects", 0o700)
     os.mkdir(target / "staging", 0o700)
     try:
         # Copy ONLY the already validated manifest entries from this invocation.
         # R6 re-read the mutable manifest after validating it (TOCTOU).
-        _file_copy_verified(source / "database.sqlite3", target / "safeforge.db",
-                            m["database_sha256"], m["database_size"])
+        file_syncs.append(_file_copy_verified(source / "database.sqlite3", target / "safeforge.db",
+                                              m["database_sha256"], m["database_size"]))
         for e in m["objects"]:
-            _file_copy_verified(source / "objects" / e["id"], target / "objects" / e["id"],
-                                e["sha256"], e["size"])
+            file_syncs.append(_file_copy_verified(source / "objects" / e["id"], target / "objects" / e["id"],
+                                                  e["sha256"], e["size"]))
         # Verify the entire copied destination before making it startable.
         if _list_regular_names(target / "objects") != {e["id"] for e in m["objects"]}:
             raise BackupRejected("restored object set mismatch")
@@ -293,7 +316,7 @@ def restore_offline(backup: str | os.PathLike, new_root: str | os.PathLike,
         os.unlink(target / "RESTORE_IN_PROGRESS")
         syncs.append(durable.fsync_dir(str(target)))
         syncs.append(durable.fsync_dir(str(target.parent)))
-        return {**checked, "verdict": "offline_restore_copy_pass", **_durability(syncs)}
+        return {**checked, "verdict": "offline_restore_copy_pass", **_durability(syncs, file_syncs)}
     except BaseException:
         # Keep failed restore clearly incomplete: caller must discard this root.
         raise

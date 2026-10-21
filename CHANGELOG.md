@@ -95,12 +95,48 @@ tests are process kills.
   content); owner, both `O_NOFOLLOW`s, the inode comparisons, the lock-file
   and root checks could each be deleted unnoticed.
 
+### Fixed (R12, self-review of the R11 head c52a7b1)
+- **SF-R12-01 (P2): backup/restore containment was lexical.** The same
+  defect class as SF-P3-03, missed in R11: `backup_offline` accepted a
+  destination inside the live store spelled `x/../store/bk` or through a
+  symlink, and `restore_offline` / `restore_atomic` a target inside the
+  backup through a symlink (the backup then no longer verifies). Containment
+  now compares `os.path.realpath`. On Windows `commonpath` raised `ValueError`
+  for a destination on another drive, i.e. for an off-volume backup; such a
+  pair is now disjoint.
+- **SF-R12-02 (P2): macOS durability.** `durable.fsync_fd` (new;
+  `fsync_file` and `fsync_dir` use it) issues `F_FULLFSYNC` on macOS and falls
+  back to fsync with a `degraded:` status, like SQLite. `db.connect` sets
+  `PRAGMA fullfsync=ON` there for FULL/EXTRA and verifies it. Backup/restore
+  reports add `file_fsync` next to `directory_fsync`; nested statuses are no
+  longer duplicated. All `os.fsync` calls in `src/` go through `durable`.
+- **SF-R12-03 (P3): coordination, asked for in R10 (SF-P2-02).** Refuse when
+  `O_NOFOLLOW` is missing instead of opening with a weaker flag set; the lock
+  file gets the marker's owner/mode rule; ownership is checked against the
+  effective uid (files are created with it; `store.py` already used it).
+- Test-only: the AF_UNIX marker forger binds a relative name (sun_path limit).
+- Regression lock for a side effect of R11: an *uncoordinated* `connect()`
+  through a `..` alias reached a coordinated database at fe123ab.
+
+### Tests (R12)
+- `tests/test_r12_hardening.py`: 19 of its cases are red against c52a7b1
+  (two of them positive controls that fail only because `db.sys` did not
+  exist there), all green on this head.
+- `experiments/dk_guard_mutants.py` (renamed from `dk_coordination_mutants.py`)
+  now deletes 31 guards across coordination, containment and the durability
+  report: **31/31 killed**, as root and as an unprivileged user.
+- Existence check (Survival-Item META-S14): the private Vero tool
+  `diskriminierung.py` does the same job with a ledger; this repo keeps its own
+  small harness because a public repo cannot depend on a private tool. It
+  mutates a copy of the tree, so an aborted run cannot leave a mutant behind.
+
 ### Known limits
 - The coordination forgers run on Linux only. macOS (also POSIX `flock`)
   runs none of them.
-- macOS: Apple documents that `fsync(2)` does not flush the drive's cache;
-  `F_FULLFSYNC` does. `durable` calls `os.fsync` and reports `"ok"`; whether
-  that reaches stable storage on macOS was not verified.
+- macOS F_FULLFSYNC is exercised for real only in the macOS CI jobs
+  (`test_real_macos_*`); drives that ignore the flush cannot be detected.
+- Windows: no directory flush (no primary source that FlushFileBuffers on a
+  directory handle persists a rename); still reported as `unsupported`.
 - Power-cut behaviour is still untested on every platform.
 
 ## [0.1.0] - 2026-10-19

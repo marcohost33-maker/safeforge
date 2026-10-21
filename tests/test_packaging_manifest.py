@@ -69,6 +69,22 @@ def test_sdist_manifest_ships_test_dependencies():
     assert not _shipped("tests/__pycache__/conftest.cpython-312.pyc", rules)
 
 
+def test_sdist_ships_every_script_the_readme_tells_users_to_run():
+    # R13: README "Reproduce" says `python experiments/exp_*.py`; before, the
+    # sdist dropped experiments/, so those commands failed from an sdist.
+    import re
+
+    rules = _rules((ROOT / "MANIFEST.in").read_text(encoding="utf-8"))
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    scripts = sorted(set(re.findall(r"python (experiments/[\w/]+\.py)", readme)))
+    assert len(scripts) >= 3  # positive control: the README section was found
+    helpers = sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / "experiments").glob("*.py"))
+    for rel in scripts:
+        assert (ROOT / rel).is_file(), rel
+    assert [rel for rel in scripts + helpers if not _shipped(rel, rules)] == []
+    assert not _shipped("experiments/__pycache__/_common.cpython-313.pyc", rules)
+
+
 @pytest.mark.parametrize(
     "text, rel, shipped",
     [

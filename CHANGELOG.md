@@ -135,6 +135,16 @@ tests are process kills.
   small harness because a public repo cannot depend on a private tool. It
   mutates a copy of the tree, so an aborted run cannot leave a mutant behind.
 
+### Packaging (R13)
+- The sdist now ships `experiments/` (I1020-10). README "Reproduce" runs
+  `python experiments/exp_*.py`, which failed from an sdist, and
+  `dk_guard_mutants.py` rebuilds the tree from `src/` and `tests/`. Checked by
+  building the sdist with `uv build --sdist` and running inside the unpacked
+  tree: pytest 321 passed / 7 skipped, `exp_sync_cost.py` ran,
+  `dk_guard_mutants.py` 31/31. `test_packaging_manifest.py` now also requires
+  every script the README names to be shipped. This reverses "experiments/
+  stays out" above.
+
 ### Known limits
 - The coordination forgers run on Linux only. macOS (also POSIX `flock`)
   runs none of them.

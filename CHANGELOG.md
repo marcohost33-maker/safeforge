@@ -145,6 +145,12 @@ tests are process kills.
   every script the README names to be shipped. This reverses "experiments/
   stays out" above.
 
+### Style (R13)
+- `ruff format` applied once (11fac89, 24 files), proven semantics-free:
+  `ast.dump` of all 44 tracked Python files identical before/after. The lint
+  job now also runs `ruff format --check .`; `.git-blame-ignore-revs` lists
+  the commit. Markdown is excluded from the formatter (I1020-10).
+
 ### Known limits
 - The coordination forgers run on Linux only. macOS (also POSIX `flock`)
   runs none of them.

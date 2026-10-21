@@ -65,17 +65,23 @@ class ZipPolicy:
             v = getattr(self, name)
             if not isinstance(v, int) or isinstance(v, bool) or v <= 0:
                 raise ValueError("%s must be a positive int" % name)
-        if (isinstance(self.max_ratio, bool) or not isinstance(self.max_ratio, (int, float))
-                or not math.isfinite(self.max_ratio) or self.max_ratio <= 0):
+        if (
+            isinstance(self.max_ratio, bool)
+            or not isinstance(self.max_ratio, (int, float))
+            or not math.isfinite(self.max_ratio)
+            or self.max_ratio <= 0
+        ):
             raise ValueError("max_ratio must be a positive finite number")
         if type(self.require_root_index) is not bool:
             raise ValueError("require_root_index must be bool")
-        if (type(self.ratio_min_bytes) is not int or self.ratio_min_bytes < 0):
+        if type(self.ratio_min_bytes) is not int or self.ratio_min_bytes < 0:
             raise ValueError("ratio_min_bytes must be a non-negative integer")
-        if (not isinstance(self.allowed_methods, tuple) or not self.allowed_methods
-                or any(type(m) is not int or m not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED)
-                       for m in self.allowed_methods)
-                or len(set(self.allowed_methods)) != len(self.allowed_methods)):
+        if (
+            not isinstance(self.allowed_methods, tuple)
+            or not self.allowed_methods
+            or any(type(m) is not int or m not in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED) for m in self.allowed_methods)
+            or len(set(self.allowed_methods)) != len(self.allowed_methods)
+        ):
             raise ValueError("allowed_methods must be a nonempty unique tuple of STORED/DEFLATED methods")
 
 
@@ -227,9 +233,7 @@ def validate_zip(source: str | os.PathLike[str] | BinaryIO, policy: ZipPolicy | 
         return _validate(zf, policy)
 
 
-def extract_zip(
-    source: str | os.PathLike[str] | BinaryIO, dest_dir: str, policy: ZipPolicy | None = None
-) -> list[ZipEntry]:
+def extract_zip(source: str | os.PathLike[str] | BinaryIO, dest_dir: str, policy: ZipPolicy | None = None) -> list[ZipEntry]:
     """Validate, then extract into a NEW directory ``dest_dir`` (must not exist).
 
     Validation and extraction use the same open archive (no re-read between

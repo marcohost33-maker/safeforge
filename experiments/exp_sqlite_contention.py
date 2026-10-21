@@ -109,10 +109,17 @@ def run_one(journal, timeout_ms, begin, writers, readers, ops):
         if kind == "r":
             r_ok += ok
     return {
-        "journal": journal, "busy_timeout_ms": timeout_ms, "begin": begin,
-        "writer_attempts": writers * ops, "writer_commits": w_ok, "writer_errors": dict(w_err),
-        "final_counter": final, "lost_updates": w_ok - final,
-        "reader_ok": r_ok, "reader_errors": dict(r_err), "wall_s": round(wall, 3),
+        "journal": journal,
+        "busy_timeout_ms": timeout_ms,
+        "begin": begin,
+        "writer_attempts": writers * ops,
+        "writer_commits": w_ok,
+        "writer_errors": dict(w_err),
+        "final_counter": final,
+        "lost_updates": w_ok - final,
+        "reader_ok": r_ok,
+        "reader_errors": dict(r_err),
+        "wall_s": round(wall, 3),
     }
 
 
@@ -130,9 +137,21 @@ def main():
             for begin in ("DEFERRED", "IMMEDIATE"):
                 r = run_one(journal, timeout_ms, begin, a.writers, a.readers, a.ops)
                 rows.append(r)
-                print("%-6s timeout=%-5d %-9s commits=%4d/%d errors=%s lost=%d reader_errors=%s wall=%.2fs" % (
-                    journal, timeout_ms, begin, r["writer_commits"], r["writer_attempts"], r["writer_errors"],
-                    r["lost_updates"], r["reader_errors"], r["wall_s"]), flush=True)
+                print(
+                    "%-6s timeout=%-5d %-9s commits=%4d/%d errors=%s lost=%d reader_errors=%s wall=%.2fs"
+                    % (
+                        journal,
+                        timeout_ms,
+                        begin,
+                        r["writer_commits"],
+                        r["writer_attempts"],
+                        r["writer_errors"],
+                        r["lost_updates"],
+                        r["reader_errors"],
+                        r["wall_s"],
+                    ),
+                    flush=True,
+                )
     print(save("contention", {"params": vars(a), "rows": rows}))
 
 

@@ -85,8 +85,7 @@ def process_event(
     psha = hashlib.sha256(payload).hexdigest()
     with db.transaction(conn, "IMMEDIATE"):
         cur = conn.execute(
-            "INSERT INTO processed_events(event_id, payload_sha, received_at) VALUES (?, ?, ?)"
-            " ON CONFLICT(event_id) DO NOTHING",
+            "INSERT INTO processed_events(event_id, payload_sha, received_at) VALUES (?, ?, ?) ON CONFLICT(event_id) DO NOTHING",
             (event_id, psha, time.time()),
         )
         if cur.rowcount == 1:

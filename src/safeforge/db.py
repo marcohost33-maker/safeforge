@@ -44,6 +44,7 @@ class _CoordinatedCursor(sqlite3.Cursor):
 
     def _check(self):
         from .coordination import require_held_key
+
         require_held_key(self.connection._guard_key)
 
     def execute(self, *args, **kwargs):
@@ -68,11 +69,12 @@ class _CoordinatedConnection(sqlite3.Connection):
 
     def _check(self):
         from .coordination import require_held_key
+
         require_held_key(self._guard_key)
 
     def cursor(self, *args, **kwargs):
         self._check()
-        kwargs.setdefault('factory', _CoordinatedCursor)
+        kwargs.setdefault("factory", _CoordinatedCursor)
         return super().cursor(*args, **kwargs)
 
     def execute(self, *args, **kwargs):
@@ -109,6 +111,7 @@ def connect(
     # A new R8 connection must acknowledge the coordinated protocol. This is
     # NOT an enforcement mechanism against old versions or raw sqlite3.connect.
     from .coordination import CoordinationRejected, initialized, require_held_key, root_key
+
     # R11: no os.path.abspath here. It removes ".." lexically while sqlite3 and
     # the kernel resolve it after symlinks, so the guard could check a
     # different directory than the one actually opened (SF-P3-03).
@@ -117,7 +120,7 @@ def connect(
     if initialized(parent):
         if not coordinated:
             raise ConfigurationError("coordinated store: use coordination.event_writer / ObjectStore(coordinated=True)")
-        if os.path.basename(path) != 'safeforge.db':
+        if os.path.basename(path) != "safeforge.db":
             raise ConfigurationError("coordinated database must be root/safeforge.db")
         key = root_key(parent)
         require_held_key(key)
@@ -133,9 +136,9 @@ def connect(
     factory = _CoordinatedConnection if coordinated else sqlite3.Connection
     # Disable SQLite statement-cache reuse for coordinated connections: the
     # authorizer is called on prepare, not reliably on every cached execution.
-    conn = sqlite3.connect(path, timeout=busy_timeout_ms / 1000.0,
-                           isolation_level=None, factory=factory,
-                           cached_statements=0 if coordinated else 128)
+    conn = sqlite3.connect(
+        path, timeout=busy_timeout_ms / 1000.0, isolation_level=None, factory=factory, cached_statements=0 if coordinated else 128
+    )
     if coordinated:
         # The directory checked above must still be the one sqlite3 opened.
         try:
@@ -146,12 +149,14 @@ def connect(
             conn.close()
             raise CoordinationRejected("store root changed while connecting")
         conn._guard_key = key
+
         def _require_live_context(action, arg1, arg2, database_name, caller):
             try:
                 require_held_key(key)
             except CoordinationRejected:
                 return sqlite3.SQLITE_DENY
             return sqlite3.SQLITE_OK
+
         # Defence in depth for direct sqlite3.Connection.execute subclass bypass.
         # A malicious in-process actor can clear this authorizer via the C API;
         # this is NOT OS-enforced mandatory writer fencing.

@@ -69,6 +69,7 @@ def test_positive_control_valid_store_is_accepted(tmp_path):
 
 # -- marker ------------------------------------------------------------------
 
+
 def test_marker_socket_rejected_by_type_check(tmp_path, monkeypatch):
     # nlink 1, our uid, mode 0600: only S_ISREG distinguishes it from a marker.
     root = mkroot(tmp_path)
@@ -181,6 +182,7 @@ def test_marker_changed_after_flock_rejected_by_second_check(tmp_path, monkeypat
 
 # -- lock file ---------------------------------------------------------------
 
+
 def _plant_lock(root: Path, make) -> None:
     path = root / LOCK
     if os.path.lexists(path):
@@ -241,6 +243,7 @@ def test_lock_replaced_after_open_rejected(tmp_path, monkeypatch):
 
 # -- store root --------------------------------------------------------------
 
+
 def test_root_symlink_rejected(tmp_path):
     root = mkroot(tmp_path)
     alias = tmp_path / "alias"
@@ -285,6 +288,7 @@ def test_root_foreign_owner_rejected(tmp_path, monkeypatch, how):
 
 
 # -- registry identity (SF-P3-03) --------------------------------------------
+
 
 def test_lock_on_one_store_does_not_unlock_another_through_dotdot_alias(tmp_path):
     # p/a is a symlink into elsewhere/, so the kernel resolves p/a/../source to

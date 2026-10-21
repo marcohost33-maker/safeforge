@@ -47,8 +47,7 @@ def main():
     for _ in range(a.reps):
         for journal, sync in CONFIGS:  # interleaved to spread drift over all configs
             res.setdefault("%s+%s" % (journal, sync), []).append(one(journal, sync, a.commits))
-    rows = {k: {"median_commits_per_s": round(statistics.median(v), 1), "all": [round(x, 1) for x in v]}
-            for k, v in res.items()}
+    rows = {k: {"median_commits_per_s": round(statistics.median(v), 1), "all": [round(x, 1) for x in v]} for k, v in res.items()}
     for k, v in rows.items():
         print("%-12s %8.1f commits/s  %s" % (k, v["median_commits_per_s"], v["all"]))
     print(save("sync_cost", {"params": vars(a), "rows": rows}))

@@ -39,6 +39,7 @@ def _store(base, name="store"):
 
 # -- SF-R12-01 containment ---------------------------------------------------
 
+
 def test_backup_into_source_through_dotdot_is_rejected(tmp_path):
     src = _store(tmp_path)
     (tmp_path / "x").mkdir()
@@ -104,6 +105,7 @@ def test_other_drive_is_disjoint_not_an_error(monkeypatch, tmp_path):
 
 # -- SF-R12-02 macOS F_FULLFSYNC ---------------------------------------------
 
+
 class _FakeFcntl(types.ModuleType):
     F_FULLFSYNC = 51
 
@@ -151,9 +153,15 @@ def _fullfsync(conn) -> int:
     return conn.execute("PRAGMA fullfsync").fetchone()[0]
 
 
-@pytest.mark.parametrize("platform,sync,expected", [
-    ("darwin", "FULL", 1), ("darwin", "EXTRA", 1), ("darwin", "NORMAL", 0), ("linux", "FULL", 0),
-])
+@pytest.mark.parametrize(
+    "platform,sync,expected",
+    [
+        ("darwin", "FULL", 1),
+        ("darwin", "EXTRA", 1),
+        ("darwin", "NORMAL", 0),
+        ("linux", "FULL", 0),
+    ],
+)
 def test_connect_sets_sqlite_fullfsync_on_macos(tmp_path, monkeypatch, platform, sync, expected):
     monkeypatch.setattr(db.sys, "platform", platform)
     conn = connect(str(tmp_path / "t.db"), synchronous=sync)
@@ -174,8 +182,7 @@ def test_real_macos_connect_has_fullfsync(tmp_path):
 
 def test_report_surfaces_degraded_file_fsync(tmp_path, monkeypatch):
     real = durable.fsync_file
-    monkeypatch.setattr(durable, "fsync_file",
-                        lambda f: (real(f), "degraded:darwin-F_FULLFSYNC-refused-fsync-only")[1])
+    monkeypatch.setattr(durable, "fsync_file", lambda f: (real(f), "degraded:darwin-F_FULLFSYNC-refused-fsync-only")[1])
     report = backup_offline(_store(tmp_path), tmp_path / "archive", confirmed_quiescent=True)
     assert report["file_fsync"] == "degraded:darwin-F_FULLFSYNC-refused-fsync-only"
     assert report["verdict"] == "offline_snapshot_integrity_pass"
@@ -189,6 +196,7 @@ def test_nested_summary_is_not_duplicated():
 
 
 # -- SF-R12-03 coordination --------------------------------------------------
+
 
 def _coordinated(base):
     root = base / "source"
@@ -206,8 +214,10 @@ def test_missing_o_nofollow_refuses_instead_of_weakening(tmp_path, monkeypatch):
         with lock(root, exclusive=False):
             pass
     except Exception as exc:  # noqa: BLE001 -- the type is what we assert on
-        assert type(exc) is CoordinationRejected and "O_NOFOLLOW is required" in str(exc), (
-            "not refused up front: %s(%s)" % (type(exc).__name__, exc))
+        assert type(exc) is CoordinationRejected and "O_NOFOLLOW is required" in str(exc), "not refused up front: %s(%s)" % (
+            type(exc).__name__,
+            exc,
+        )
     else:
         raise AssertionError("coordination ran without O_NOFOLLOW")
 

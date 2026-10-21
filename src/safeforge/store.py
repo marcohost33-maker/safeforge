@@ -190,9 +190,12 @@ def _file_matches(path: str, sha256: str, size: int) -> bool:
                 h.update(chunk)
             # Catch a path swap or in-place size mutation during hashing.
             opened, after = os.fstat(f.fileno()), os.lstat(path)
-            return (stat.S_ISREG(after.st_mode) and
-                    (opened.st_dev, opened.st_ino) == (after.st_dev, after.st_ino) and
-                    opened.st_size == size and h.hexdigest() == sha256)
+            return (
+                stat.S_ISREG(after.st_mode)
+                and (opened.st_dev, opened.st_ino) == (after.st_dev, after.st_ino)
+                and opened.st_size == size
+                and h.hexdigest() == sha256
+            )
     except (OSError, ValueError):
         return False
 
@@ -239,15 +242,16 @@ class ObjectStore:
             raise ValueError("enforce_private requires POSIX permission semantics")
         root = os.path.abspath(root)
         from . import coordination
+
         if coordination.initialized(root) != coordinated:
             raise IngestError("coordination mode mismatch; migrate/opt in explicitly")
         if coordinated:
             # The offline backup snapshots ONLY root/safeforge.db and root/staging.
             # Arbitrary auxiliary paths would silently escape its inventory.
-            if db_path is not None and os.path.abspath(db_path) != os.path.join(root, 'safeforge.db'):
-                raise IngestError('coordinated mode requires database inside store root')
-            if staging_dir is not None and os.path.abspath(staging_dir) != os.path.join(root, 'staging'):
-                raise IngestError('coordinated mode requires canonical staging directory')
+            if db_path is not None and os.path.abspath(db_path) != os.path.join(root, "safeforge.db"):
+                raise IngestError("coordinated mode requires database inside store root")
+            if staging_dir is not None and os.path.abspath(staging_dir) != os.path.join(root, "staging"):
+                raise IngestError("coordinated mode requires canonical staging directory")
         self._coordinated_lock = None
         if coordinated:
             # A live, long-lived store holds SH across *all* writes and
@@ -288,8 +292,9 @@ class ObjectStore:
                     fd = os.open(self.db_path, flags, 0o600)
                     os.close(fd)
                 _check_private_path(self.db_path, directory=False)
-            self._conn = db.connect(self.db_path, synchronous=synchronous,
-                                    busy_timeout_ms=busy_timeout_ms, coordinated=coordinated)
+            self._conn = db.connect(
+                self.db_path, synchronous=synchronous, busy_timeout_ms=busy_timeout_ms, coordinated=coordinated
+            )
             with db.transaction(self._conn):
                 for stmt in filter(None, (s.strip() for s in _SCHEMA.split(";"))):
                     self._conn.execute(stmt)
@@ -365,9 +370,7 @@ class ObjectStore:
         """
         if not isinstance(oid, str) or not _ID_RE.fullmatch(oid):
             raise KeyError(oid)
-        row = self._conn.execute(
-            "SELECT sha256, size FROM objects WHERE id=? AND status='stored'", (oid,)
-        ).fetchone()
+        row = self._conn.execute("SELECT sha256, size FROM objects WHERE id=? AND status='stored'", (oid,)).fetchone()
         if row is None:
             raise KeyError(oid)
         try:
@@ -382,9 +385,12 @@ class ObjectStore:
             for chunk in iter(lambda: f.read(1 << 20), b""):
                 h.update(chunk)
             opened, after = os.fstat(f.fileno()), os.lstat(self._obj(oid))
-            if ((opened.st_dev, opened.st_ino) != (after.st_dev, after.st_ino)
-                    or not stat.S_ISREG(after.st_mode) or opened.st_size != size
-                    or h.hexdigest() != sha):
+            if (
+                (opened.st_dev, opened.st_ino) != (after.st_dev, after.st_ino)
+                or not stat.S_ISREG(after.st_mode)
+                or opened.st_size != size
+                or h.hexdigest() != sha
+            ):
                 raise IngestError("stored object digest or identity mismatch")
             f.seek(0)
             return f
@@ -409,9 +415,7 @@ class ObjectStore:
                 raise ValueError("%s must be a positive int" % name)
         if expected_sha256 is not None and (not isinstance(expected_sha256, str) or not _SHA_RE.fullmatch(expected_sha256)):
             raise ValueError("expected_sha256 must be 64 lowercase hex chars")
-        if idempotency_key is not None and (
-            not isinstance(idempotency_key, str) or not 0 < len(idempotency_key) <= 256
-        ):
+        if idempotency_key is not None and (not isinstance(idempotency_key, str) or not 0 < len(idempotency_key) <= 256):
             raise ValueError("idempotency_key must be a non-empty str of at most 256 chars")
 
         if idempotency_key is not None:
@@ -531,7 +535,10 @@ class ObjectStore:
             pass  # the reconciler resolves whatever is left
 
     def reconcile(
-        self, *, grace_seconds: float = 300.0, now: float | None = None,
+        self,
+        *,
+        grace_seconds: float = 300.0,
+        now: float | None = None,
         verify_stored_digests: bool = False,
     ) -> ReconcileReport:
         """Bring disk and database back into agreement. Idempotent.
@@ -615,11 +622,9 @@ class ObjectStore:
                 rep.skipped.append("%s: %s" % (path, e))
 
         # (d) stored rows whose file is gone or wrong: cannot be repaired, only reported.
-        for oid, size in self._conn.execute(
-            "SELECT id, size FROM objects WHERE status='stored'"
-        ).fetchall():
+        for oid, size in self._conn.execute("SELECT id, size FROM objects WHERE status='stored'").fetchall():
             p = self._obj(oid)
-            if (os.path.islink(p) or not os.path.isfile(p) or os.path.getsize(p) != size):
+            if os.path.islink(p) or not os.path.isfile(p) or os.path.getsize(p) != size:
                 rep.missing_or_corrupt.append(oid)
             elif verify_stored_digests:
                 row = self._conn.execute("SELECT sha256 FROM objects WHERE id=?", (oid,)).fetchone()
@@ -630,9 +635,7 @@ class ObjectStore:
     def verify(self) -> list[str]:
         """Full re-hash of every stored object. Returns the ids that do not match."""
         bad = []
-        for oid, sha, size in self._conn.execute(
-            "SELECT id, sha256, size FROM objects WHERE status='stored'"
-        ).fetchall():
+        for oid, sha, size in self._conn.execute("SELECT id, sha256, size FROM objects WHERE status='stored'").fetchall():
             if not _file_matches(self._obj(oid), sha, size):
                 bad.append(oid)
         return bad

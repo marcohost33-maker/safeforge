@@ -114,8 +114,9 @@ def test_idempotency_key_dedups(store, tmp_path):
 def test_idempotency_key_with_different_content_conflicts(store):
     store.ingest(io.BytesIO(b"one"), max_bytes=10, idempotency_key="upload-2")
     with pytest.raises(IdempotencyConflict):
-        store.ingest(io.BytesIO(b"two"), max_bytes=10, idempotency_key="upload-2",
-                     expected_sha256=hashlib.sha256(b"two").hexdigest())
+        store.ingest(
+            io.BytesIO(b"two"), max_bytes=10, idempotency_key="upload-2", expected_sha256=hashlib.sha256(b"two").hexdigest()
+        )
 
 
 def test_path_of_refuses_unknown_and_malformed(store):
@@ -136,12 +137,10 @@ def test_step_order_fsync_publish_dirsync_commit(monkeypatch, store):
     real_ff, real_pub, real_fd = durable.fsync_file, durable.publish, durable.fsync_dir
     monkeypatch.setattr(durable, "fsync_file", lambda f: (events.append("fsync_file"), real_ff(f))[1])
     monkeypatch.setattr(durable, "publish", lambda a, b: (events.append("publish"), real_pub(a, b))[1])
-    monkeypatch.setattr(durable, "fsync_dir",
-                        lambda d: (events.append("fsync_dir:" + os.path.basename(d)), real_fd(d))[1])
+    monkeypatch.setattr(durable, "fsync_dir", lambda d: (events.append("fsync_dir:" + os.path.basename(d)), real_fd(d))[1])
     _faults.set_hook(lambda name: events.append(name) if name in ("intent.committed", "status.committed") else None)
     store.ingest(io.BytesIO(b"order"), max_bytes=10)
-    assert events == ["fsync_file", "intent.committed", "publish", "fsync_dir:objects",
-                      "fsync_dir:staging", "status.committed"]
+    assert events == ["fsync_file", "intent.committed", "publish", "fsync_dir:objects", "fsync_dir:staging", "status.committed"]
 
 
 def _record_syncs(monkeypatch) -> list:

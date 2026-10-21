@@ -21,8 +21,7 @@ def run_crash(design: str, root: str, point: str, nbytes: int = 65536, staging: 
     args = [sys.executable, "-m", "tests.crash_driver", design, root, point, str(nbytes)]
     if staging:
         args.append(staging)
-    p = subprocess.run(args, cwd=REPO, env=child_env(), stdin=subprocess.DEVNULL,
-                       capture_output=True, text=True, timeout=120)
+    p = subprocess.run(args, cwd=REPO, env=child_env(), stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120)
     ack = None
     for line in p.stdout.splitlines():
         if line.startswith("ACK "):

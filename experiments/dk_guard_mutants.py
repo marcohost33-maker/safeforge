@@ -40,21 +40,37 @@ MUTANTS = [
     ("marker-type", C, "if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1", "if st.st_nlink != 1"),
     ("marker-nlink", C, "or st.st_nlink != 1 or st.st_uid", "or st.st_uid"),
     ("marker-owner", C, "or st.st_uid != os.geteuid() or (st.st_mode & 0o077)", "or (st.st_mode & 0o077)"),
-    ("marker-owner-real-uid", C, "or st.st_uid != os.geteuid() or (st.st_mode & 0o077)",
-     "or st.st_uid != os.getuid() or (st.st_mode & 0o077)"),
+    (
+        "marker-owner-real-uid",
+        C,
+        "or st.st_uid != os.geteuid() or (st.st_mode & 0o077)",
+        "or st.st_uid != os.getuid() or (st.st_mode & 0o077)",
+    ),
     ("marker-mode", C, " or (st.st_mode & 0o077):", ":"),
     ("marker-nofollow", C, "os.open(marker, os.O_RDONLY | os.O_NOFOLLOW)", "os.open(marker, os.O_RDONLY)"),
     ("marker-inode", C, "if (opened.st_dev, opened.st_ino) != (st.st_dev, st.st_ino):", "if False:"),
     ("marker-content", C, "if content != MARKER_CONTENT:", "if False:"),
-    ("marker-oserror-map", C, "    except OSError as exc:\n        # R11 (SF-R11-01): a marker",
-     "    except ZeroDivisionError as exc:\n        # R11 (SF-R11-01): a marker"),
+    (
+        "marker-oserror-map",
+        C,
+        "    except OSError as exc:\n        # R11 (SF-R11-01): a marker",
+        "    except ZeroDivisionError as exc:\n        # R11 (SF-R11-01): a marker",
+    ),
     ("marker-recheck-after-flock", C, "before.\n        if require_marker:", "before.\n        if False:"),
     # lock file
     ("nofollow-required", C, 'if not hasattr(os, "O_NOFOLLOW"):', "if False:"),
-    ("lock-nofollow", C, 'os.open(path, os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)',
-     "os.open(path, os.O_CREAT | os.O_RDWR, 0o600)"),
-    ("lock-oserror-map", C, "    except OSError as exc:\n        # R11 (SF-R11-01): symlink",
-     "    except ZeroDivisionError as exc:\n        # R11 (SF-R11-01): symlink"),
+    (
+        "lock-nofollow",
+        C,
+        'os.open(path, os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)',
+        "os.open(path, os.O_CREAT | os.O_RDWR, 0o600)",
+    ),
+    (
+        "lock-oserror-map",
+        C,
+        "    except OSError as exc:\n        # R11 (SF-R11-01): symlink",
+        "    except ZeroDivisionError as exc:\n        # R11 (SF-R11-01): symlink",
+    ),
     ("lock-type", C, "if not stat.S_ISREG(st.st_mode):\n        os.close(fd)", "if False:\n        os.close(fd)"),
     ("lock-nlink", C, "if st.st_nlink != 1:\n        os.close(fd)", "if False:\n        os.close(fd)"),
     ("lock-owner", C, "(st.st_uid != os.geteuid() or st.st_mode & 0o077)", "(st.st_mode & 0o077)"),
@@ -66,20 +82,32 @@ MUTANTS = [
     ("root-mode", C, "if (st.st_mode & 0o077) or st.st_uid != os.geteuid():", "if st.st_uid != os.geteuid():"),
     ("root-owner", C, "if (st.st_mode & 0o077) or st.st_uid != os.geteuid():", "if (st.st_mode & 0o077):"),
     # registry identity (SF-P3-03)
-    ("connect-lexical-parent", D, "parent = os.path.dirname(os.fspath(path)) or os.curdir",
-     "parent = os.path.dirname(os.path.abspath(path))"),
+    (
+        "connect-lexical-parent",
+        D,
+        "parent = os.path.dirname(os.fspath(path)) or os.curdir",
+        "parent = os.path.dirname(os.path.abspath(path))",
+    ),
     # containment (SF-R12-01)
-    ("containment-lexical", B, "c, p = os.path.realpath(child), os.path.realpath(parent)",
-     "c, p = os.path.abspath(child), os.path.abspath(parent)"),
-    ("containment-other-drive", B, "    except ValueError:\n        return False",
-     "    except ZeroDivisionError:\n        return False"),
+    (
+        "containment-lexical",
+        B,
+        "c, p = os.path.realpath(child), os.path.realpath(parent)",
+        "c, p = os.path.abspath(child), os.path.abspath(parent)",
+    ),
+    (
+        "containment-other-drive",
+        B,
+        "    except ValueError:\n        return False",
+        "    except ZeroDivisionError:\n        return False",
+    ),
     # durability reporting (SF-P2-01, SF-R12-02)
-    ("darwin-fullfsync", U, 'if sys.platform == "darwin":\n        import fcntl', 'if False:\n        import fcntl'),
+    ("darwin-fullfsync", U, 'if sys.platform == "darwin":\n        import fcntl', "if False:\n        import fcntl"),
     ("darwin-fallback-says-ok", U, 'return "degraded:darwin-F_FULLFSYNC-refused-fsync-only"', 'return "ok"'),
     ("sqlite-fullfsync", D, 'if sys.platform == "darwin" and sync != "NORMAL":', "if False:"),
     ("report-dir-syncs-dropped", B, '{"directory_fsync": _summary(dir_syncs)', '{"directory_fsync": _summary([])'),
     ("report-file-syncs-dropped", B, '"file_fsync": _summary(file_syncs)', '"file_fsync": _summary([])'),
-    ("report-nested-split", B, 'for part in s.split(";")', 'for part in [s]'),
+    ("report-nested-split", B, 'for part in s.split(";")', "for part in [s]"),
 ]
 
 
@@ -105,7 +133,10 @@ def _run(tree: str) -> tuple[int, list[tuple[str, bool]]]:
     report = os.path.join(tree, "junit.xml")
     proc = subprocess.run(
         [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "--junitxml", report, *TESTS],
-        cwd=tree, capture_output=True, text=True, timeout=300,
+        cwd=tree,
+        capture_output=True,
+        text=True,
+        timeout=300,
     )
     failed = []
     for case in ElementTree.parse(report).getroot().iter("testcase"):
@@ -156,14 +187,17 @@ def main() -> int:
         shutil.rmtree(tree, ignore_errors=True)
     survived = [r["mutant"] for r in rows if not r["killed"]]
     print("\n%d/%d mutants killed; restore green: %s" % (len(rows) - len(survived), len(rows), restored))
-    path = save("dk_guard_mutants", {
-        "euid": os.geteuid(),
-        "tests": TESTS,
-        "mutants": rows,
-        "survived": survived,
-        "restore_green": restored,
-        "seconds": round(time.time() - t0, 1),
-    })
+    path = save(
+        "dk_guard_mutants",
+        {
+            "euid": os.geteuid(),
+            "tests": TESTS,
+            "mutants": rows,
+            "survived": survived,
+            "restore_green": restored,
+            "seconds": round(time.time() - t0, 1),
+        },
+    )
     print("wrote", path)
     return 0 if not survived and restored else 1
 

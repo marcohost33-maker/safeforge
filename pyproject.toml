@@ -36,6 +36,10 @@ addopts = "-ra"
 line-length = 130
 target-version = "py312"
 
+[tool.ruff.format]
+# Markdown code blocks keep their hand-aligned comments (README "Use").
+exclude = ["*.md"]
+
 [tool.ruff.lint]
 select = ["E", "F", "W", "B", "I", "UP"]
 ignore = ["UP031"]

@@ -144,25 +144,47 @@ def test_step_order_fsync_publish_dirsync_commit(monkeypatch, store):
                       "fsync_dir:staging", "status.committed"]
 
 
-def test_fsync_file_really_calls_os_fsync(monkeypatch, tmp_path):
+def _record_syncs(monkeypatch) -> list:
+    """Record each sync primitive as (name, fd): os.fsync, and on macOS F_FULLFSYNC.
+
+    R12: on macOS durable issues fcntl(F_FULLFSYNC), because fsync(2) there
+    does not flush the drive cache; plain os.fsync is only the fallback.
+    """
     calls = []
     real = os.fsync
-    monkeypatch.setattr(os, "fsync", lambda fd: (calls.append(fd), real(fd))[1])
+    monkeypatch.setattr(os, "fsync", lambda fd: (calls.append(("fsync", fd)), real(fd))[1])
+    if sys.platform == "darwin":
+        import fcntl
+
+        real_fcntl = fcntl.fcntl
+
+        def spy(fd, cmd, *a):
+            if cmd == fcntl.F_FULLFSYNC:
+                calls.append(("F_FULLFSYNC", fd))
+            return real_fcntl(fd, cmd, *a)
+
+        monkeypatch.setattr(fcntl, "fcntl", spy)
+    return calls
+
+
+EXPECTED_SYNC = "F_FULLFSYNC" if sys.platform == "darwin" else "fsync"
+
+
+def test_fsync_file_really_syncs(monkeypatch, tmp_path):
+    calls = _record_syncs(monkeypatch)
     with open(tmp_path / "f", "wb") as f:
         f.write(b"x")
-        durable.fsync_file(f)
-        assert calls == [f.fileno()]
+        assert durable.fsync_file(f) == "ok"
+        assert calls == [(EXPECTED_SYNC, f.fileno())]
 
 
 def test_fsync_dir_reports_platform_truthfully(tmp_path, monkeypatch):
-    calls = []
-    real = os.fsync
-    monkeypatch.setattr(os, "fsync", lambda fd: (calls.append(fd), real(fd))[1])
+    calls = _record_syncs(monkeypatch)
     status = durable.fsync_dir(str(tmp_path))
     if sys.platform == "win32":
         assert status.startswith("unsupported:") and calls == []
     else:
-        assert status == "ok" and len(calls) == 1
+        assert status == "ok" and [name for name, _ in calls] == [EXPECTED_SYNC]
 
 
 def test_ingest_result_reports_dir_sync(store):

@@ -138,8 +138,12 @@ tests are process kills.
 ### Known limits
 - The coordination forgers run on Linux only. macOS (also POSIX `flock`)
   runs none of them.
-- macOS F_FULLFSYNC is exercised for real only in the macOS CI jobs
-  (`test_real_macos_*`); drives that ignore the flush cannot be detected.
+- macOS F_FULLFSYNC is exercised for real only in the macOS CI jobs: on
+  `macos-latest` (CI run 39596375905) `test_real_macos_*` passed, i.e.
+  F_FULLFSYNC succeeded on a file and on a directory fd, and SQLite reported
+  `fullfsync=1`. Drives that ignore the flush cannot be detected. The same run
+  failed two older tests that asserted `os.fsync` is called; on macOS that is
+  now the fallback, so they assert the platform's sync primitive instead.
 - Windows: no directory flush (no primary source that FlushFileBuffers on a
   directory handle persists a rename); still reported as `unsupported`.
 - Power-cut behaviour is still untested on every platform.

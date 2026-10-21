@@ -260,10 +260,25 @@ def test_root_mode_rejected(tmp_path, mode):
     rejected(root, "mode 0700")
 
 
-@pytest.mark.skipif(not IS_ROOT, reason="a real foreign owner needs chown (root)")
-def test_root_foreign_owner_rejected(tmp_path):
+@pytest.mark.parametrize("how", ["chown", "stat-shim"])
+def test_root_foreign_owner_rejected(tmp_path, monkeypatch, how):
     root = mkroot(tmp_path)
-    os.chown(root, NOBODY, -1)
+    if how == "chown":
+        if not IS_ROOT:
+            pytest.skip("a real foreign owner needs chown (root); stat-shim covers the comparison")
+        os.chown(root, NOBODY, -1)
+    else:
+        real = os.stat
+
+        def fake_stat(path, *a, **k):
+            st = real(path, *a, **k)
+            if os.fspath(path) == os.fspath(root):
+                fields = list(st)
+                fields[4] = st.st_uid + 1  # st_uid
+                return os.stat_result(fields)
+            return st
+
+        monkeypatch.setattr(coordination.os, "stat", fake_stat)
     rejected(root, "mode 0700")
 
 

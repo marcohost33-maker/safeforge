@@ -84,13 +84,14 @@ tests are process kills.
 ### Tests (R11)
 - `tests/test_r11_coordination_forgers.py`: one forger per marker, lock-file
   and root check (socket, hard link, foreign owner via real `chown` when run as
-  root plus an `lstat` shim otherwise, mode bits, content, symlink/regular file
+  root plus an `lstat`/`stat` shim otherwise (marker and root), mode bits, content, symlink/regular file
   swapped in between `lstat` and `open`, marker or lock changed after `flock`,
   symlinked/non-directory root), each asserting the rejecting check's own
   message; registry identity across `..`, symlinked parents and relative paths.
 - `experiments/dk_coordination_mutants.py`: deletes the 19 checks one at a
   time from a copy of the tree. Linux, CPython 3.13, root: **19/19 killed**,
-  restore green. The R9 tests alone killed **3/19** (link count, mode,
+  restore green; also 19/19 as an unprivileged user (shims instead of
+  `chown`). The R9 tests alone killed **3/19** (link count, mode,
   content); owner, both `O_NOFOLLOW`s, the inode comparisons, the lock-file
   and root checks could each be deleted unnoticed.
 

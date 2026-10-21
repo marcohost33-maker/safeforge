@@ -59,11 +59,48 @@ tests are process kills.
   same as the checkout. `experiments/` stays out (not needed by the tests).
   The wheel is unchanged. `tests/test_packaging_manifest.py` checks the rule.
 
+### Fixed (R11, cross-family findings on fe123ab)
+- **SF-P3-03, raised to P2: one store's lock unlocked another store's
+  database.** `lock()` keyed its registry by `Path.absolute()`, `connect()` by
+  `os.path.abspath()`. abspath removes `..` lexically; the kernel resolves it
+  after symlinks. With `p/a` a symlink into `elsewhere/`, holding the lock of
+  `p/source` let `connect("p/a/../source/safeforge.db", coordinated=True)` open
+  `elsewhere/source/safeforge.db` without its lock, so an EX offline backup of
+  that store could run beside the writer. The registry is now keyed by the
+  directory identity `(st_dev, st_ino)` (`coordination.root_key`), connect no
+  longer normalises the path, and the identity is re-checked after
+  `sqlite3.connect`. Side effect: a legitimate root spelled with `..` or
+  relative is no longer refused.
+- **SF-R11-01 (P3):** three forged states failed closed but leaked a raw
+  `OSError` instead of `CoordinationRejected`: a marker swapped for a symlink
+  between `lstat` and `open` (ELOOP), and a symlink or directory in place of
+  the lock file (ELOOP / EISDIR).
+- **SF-P2-01 (P2):** `backup_offline`, `restore_offline` and `restore_atomic`
+  ignored what `durable.fsync_dir` returned. Their reports now carry
+  `directory_fsync` (`"ok"`, or every distinct `"unsupported:…"` status, e.g.
+  on Windows) and `power_loss_verified: false`, next to the unchanged
+  integrity verdict. `verify_backup` (read-only) does not claim either.
+
+### Tests (R11)
+- `tests/test_r11_coordination_forgers.py`: one forger per marker, lock-file
+  and root check (socket, hard link, foreign owner via real `chown` when run as
+  root plus an `lstat` shim otherwise, mode bits, content, symlink/regular file
+  swapped in between `lstat` and `open`, marker or lock changed after `flock`,
+  symlinked/non-directory root), each asserting the rejecting check's own
+  message; registry identity across `..`, symlinked parents and relative paths.
+- `experiments/dk_coordination_mutants.py`: deletes the 19 checks one at a
+  time from a copy of the tree. Linux, CPython 3.13, root: **19/19 killed**,
+  restore green. The R9 tests alone killed **3/19** (link count, mode,
+  content); owner, both `O_NOFOLLOW`s, the inode comparisons, the lock-file
+  and root checks could each be deleted unnoticed.
+
 ### Known limits
-- Verified locally on Windows (Python 3.12) only. Linux results come from the
-  reviewer's synthetic checkout; macOS was never run. The Linux-only R8/R9
-  tests (flock, marker metadata, `renameat2`, `fork`) have not run on the
-  integrated tree.
+- The coordination forgers run on Linux only. macOS (also POSIX `flock`)
+  runs none of them.
+- macOS: Apple documents that `fsync(2)` does not flush the drive's cache;
+  `F_FULLFSYNC` does. `durable` calls `os.fsync` and reports `"ok"`; whether
+  that reaches stable storage on macOS was not verified.
+- Power-cut behaviour is still untested on every platform.
 
 ## [0.1.0] - 2026-10-19
 

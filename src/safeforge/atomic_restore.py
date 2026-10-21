@@ -14,7 +14,7 @@ import tempfile
 from pathlib import Path
 
 from . import durable
-from .offline_backup import BackupRejected, restore_offline
+from .offline_backup import BackupRejected, _durability, restore_offline
 
 RENAME_NOREPLACE = 1
 AT_FDCWD = -100
@@ -65,13 +65,12 @@ def restore_atomic(backup: str | os.PathLike, new_root: str | os.PathLike,
         report = restore_offline(source, stage, confirmed_quiescent=True)
         # The private workspace's access mode is 0700, including before the
         # restore creates any child paths. It stays private if interrupted.
-        durable.fsync_dir(str(stage))
-        durable.fsync_dir(str(workspace))
+        syncs = [report['directory_fsync'], durable.fsync_dir(str(stage)), durable.fsync_dir(str(workspace))]
         _publish_new_directory(stage, destination)
-        durable.fsync_dir(str(parent))
+        syncs.append(durable.fsync_dir(str(parent)))
         return {**report, 'verdict': 'atomic_restore_published_linux',
                 'publication': 'renameat2_RENAME_NOREPLACE',
-                'power_loss_verified': False}
+                **_durability(syncs)}
     finally:
         if workspace.exists():
             # Never delete the published destination; leftover workspace is

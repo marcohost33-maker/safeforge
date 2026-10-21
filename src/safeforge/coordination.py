@@ -28,15 +28,38 @@ def _contexts() -> dict:
     return _held.contexts
 
 
+def root_key(root: str | os.PathLike) -> tuple[int, int]:
+    """Registry identity of a store root: ``(st_dev, st_ino)`` of the directory.
+
+    R11 (SF-P3-03): lock() keyed by ``Path.absolute()`` and db.connect by
+    ``os.path.abspath``. abspath drops ``..`` lexically, the kernel resolves it
+    after symlinks, so ``root/link/../x`` named one directory for the guard and
+    another for sqlite3: a lock on one store unlocked the database of another.
+    The inode identity is what the kernel actually opens, for every spelling of
+    the path (``..``, symlinked parents, case-insensitive volumes).
+    """
+    try:
+        st = os.stat(root)
+    except OSError as exc:
+        raise CoordinationRejected("store root is not accessible") from exc
+    if not stat.S_ISDIR(st.st_mode):
+        raise CoordinationRejected("store root is not a directory")
+    return (st.st_dev, st.st_ino)
+
+
+def require_held_key(key: tuple[int, int]) -> None:
+    """:func:`require_held` for a key already computed with :func:`root_key`."""
+    if not _contexts().get(key):
+        raise CoordinationRejected("coordinated=True requires a live lock in this process/thread")
+
+
 def require_held(root: str | os.PathLike) -> None:
     """Reject a coordinated DB connection unless this thread actually holds a lock.
 
     Direct sqlite3 clients still bypass this *library* guard. Inherited/forked
     thread-local context is invalid because the PID must match.
     """
-    key = str(Path(root).absolute())
-    if not _contexts().get(key):
-        raise CoordinationRejected("coordinated=True requires a live lock in this process/thread")
+    require_held_key(root_key(root))
 
 
 def _check_marker(root: Path) -> None:
@@ -57,6 +80,10 @@ def _check_marker(root: Path) -> None:
             raise CoordinationRejected("invalid coordination marker content")
     except FileNotFoundError as exc:
         raise CoordinationRejected("coordination not initialized") from exc
+    except OSError as exc:
+        # R11 (SF-R11-01): a marker swapped for a symlink between lstat and
+        # open fails O_NOFOLLOW with ELOOP; that is a rejection, not a crash.
+        raise CoordinationRejected("coordination marker cannot be opened safely") from exc
 
 
 class CoordinationRejected(RuntimeError):
@@ -74,7 +101,11 @@ def _fcntl():
 def _regular_fd(root: Path) -> int:
     path = root / LOCK
     # No symlink following, never replace the lock inode.
-    fd = os.open(path, os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    except OSError as exc:
+        # R11 (SF-R11-01): symlink (ELOOP) or directory (EISDIR) in place of the lock.
+        raise CoordinationRejected("lock must be a regular file") from exc
     mode = os.fstat(fd).st_mode
     if not stat.S_ISREG(mode):
         os.close(fd)
@@ -152,7 +183,7 @@ def lock(root: str | os.PathLike, *, exclusive: bool, require_marker: bool = Tru
         # Validate marker AFTER acquiring the lock as well as before.
         if require_marker:
             _check_marker(root)
-        key = str(root)
+        key = root_key(root)
         contexts = _contexts()
         contexts[key] = contexts.get(key, 0) + 1
         try:

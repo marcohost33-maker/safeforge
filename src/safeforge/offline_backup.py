@@ -26,6 +26,18 @@ class BackupRejected(RuntimeError):
     """A backup/restore invariant was not met. Never treat partial output as ready."""
 
 
+def _durability(dir_syncs: list[str]) -> dict:
+    """What the directory fsyncs actually did, for the caller to see (R11, SF-P2-01).
+
+    ``durable.fsync_dir`` returns ``"unsupported:..."`` on Windows. The backup
+    still passes its integrity check there, but its directory entries were never
+    forced to disk; a report that only says "pass" would hide that.
+    """
+    failed = sorted({s for s in dir_syncs if s != "ok"})
+    return {"directory_fsync": "ok" if not failed else ";".join(failed),
+            "power_loss_verified": False}
+
+
 def _check_confirmation(confirmed_quiescent: bool) -> None:
     if confirmed_quiescent is not True:
         raise BackupRejected("explicit confirmed_quiescent=True required; stop ALL writers and reconcilers first")
@@ -173,12 +185,12 @@ def backup_offline(source_root: str | os.PathLike, destination: str | os.PathLik
                     "objects": expected, "writer_quiescence": "operator_attested_not_verified_by_library"}
         material = _canonical_json(manifest)
         _write_sync(dst / "manifest.json", material)
-        durable.fsync_dir(str(objects))
+        syncs = [durable.fsync_dir(str(objects))]
         # COMPLETE is the LAST action; orphan/incomplete dirs never validate.
         _write_sync(dst / "COMPLETE", hashlib.sha256(material).hexdigest().encode("ascii") + b"\n")
-        durable.fsync_dir(str(dst))
-        durable.fsync_dir(str(dst.parent))
-        return verify_backup(dst)
+        syncs.append(durable.fsync_dir(str(dst)))
+        syncs.append(durable.fsync_dir(str(dst.parent)))
+        return {**verify_backup(dst), **_durability(syncs)}
     finally:
         read.close()
 
@@ -277,12 +289,11 @@ def restore_offline(backup: str | os.PathLike, new_root: str | os.PathLike,
         if ((source / "manifest.json").read_bytes() != verified_material
                 or (source / "COMPLETE").read_bytes() != expected_marker):
             raise BackupRejected("backup manifest or COMPLETE changed during restore")
-        for d in (target / "objects", target / "staging", target):
-            durable.fsync_dir(str(d))
+        syncs = [durable.fsync_dir(str(d)) for d in (target / "objects", target / "staging", target)]
         os.unlink(target / "RESTORE_IN_PROGRESS")
-        durable.fsync_dir(str(target))
-        durable.fsync_dir(str(target.parent))
-        return {**checked, "verdict": "offline_restore_copy_pass"}
+        syncs.append(durable.fsync_dir(str(target)))
+        syncs.append(durable.fsync_dir(str(target.parent)))
+        return {**checked, "verdict": "offline_restore_copy_pass", **_durability(syncs)}
     except BaseException:
         # Keep failed restore clearly incomplete: caller must discard this root.
         raise

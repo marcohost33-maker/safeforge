@@ -1,0 +1,163 @@
+{
+  "env": {
+    "cpu_count": 4,
+    "git_dirty": true,
+    "git_head": "fe123ab7c4ba04121911885488da70e3888793e5",
+    "platform": "Linux-6.18.44-fc-v140-x86_64-with-glibc2.39",
+    "python": "3.13.16",
+    "sqlite": "3.45.1",
+    "utc": "2026-10-21T11:18:07Z"
+  },
+  "euid": 0,
+  "mutants": [
+    {
+      "killed": true,
+      "killed_by": [
+        "test_marker_socket_rejected_by_type_check"
+      ],
+      "mutant": "marker-type"
+    },
+    {
+      "killed": true,
+      "killed_by": [
+        "test_marker_hardlink_rejected_by_link_count",
+        "test_corrupted_marker_refused[hardlink]"
+      ],
+      "mutant": "marker-nlink"
+    },
+    {
+      "killed": true,
+      "killed_by": [
+        "test_marker_foreign_owner_rejected[chown]",
+        "test_marker_foreign_owner_rejected[lstat-shim]"
+      ],
+      "mutant": "marker-owner"
+    },
+    {
+      "killed": true,
+      "killed_by": [
+        "test_marker_group_or_other_bits_rejected[416]",
+        "test_marker_group_or_other_bits_rejected[388]",
+        "test_marker_group_or_other_bits_rejected[392]",
+        "test_corrupted_marker_refused[permissions]"
+      ],
+      "mutant": "marker-mode"
+    },
+    {
+      "killed": true,
+      "killed_by": [
+        "test_marker_symlink_swapped_in_after_lstat_rejected_by_nofollow"
+      ],
+      "mutant": "marker-nofollow"
+    },
+    {
+      "killed": true,
+      "killed_by": [
+        "test_marker_regular_file_swapped_in_after_lstat_rejected_by_inode_check"
+      ],
+      "mutant": "marker-inode"
+    },
+    {
+      "killed": true,
+      "killed_by": [
+        "test_marker_content_rejected",
+        "test_marker_changed_after_flock_rejected_by_second_check",
+        "test_corrupted_marker_refused[contents]"
+      ],
+      "mutant": "marker-content"
+    },
+    {
+      "killed": true,
+      "killed_by": [
+        "test_marker_symlink_swapped_in_after_lstat_rejected_by_nofollow"
+      ],
+      "mutant": "marker-oserror-map"
+    },
+    {
+      "killed": true,
+      "killed_by": [
+        "test_lock_symlink_rejected_at_open"
+      ],
+      "mutant": "lock-nofollow"
+    },
+    {
+      "killed": true,
+      "killed_by": [
+        "test_lock_symlink_rejected_at_open",
+        "test_lock_directory_rejected_at_open"
+      ],
+      "mutant": "lock-oserror-map"
+    },
+    {
+      "killed": true,
+      "killed_by": [
+        "test_lock_fifo_rejected_by_type_check"
+      ],
+      "mutant": "lock-type"
+    },
+    {
+      "killed": true,
+      "killed_by": [
+        "test_lock_hardlink_rejected_by_link_count"
+      ],
+      "mutant": "lock-nlink"
+    },
+    {
+      "killed": true,
+      "killed_by": [
+        "test_lock_replaced_after_open_rejected"
+      ],
+      "mutant": "lock-replaced-after-flock"
+    },
+    {
+      "killed": true,
+      "killed_by": [
+        "test_marker_changed_after_flock_rejected_by_second_check"
+      ],
+      "mutant": "marker-recheck-after-flock"
+    },
+    {
+      "killed": true,
+      "killed_by": [
+        "test_root_symlink_rejected"
+      ],
+      "mutant": "root-symlink"
+    },
+    {
+      "killed": true,
+      "killed_by": [
+        "test_root_regular_file_rejected"
+      ],
+      "mutant": "root-isdir"
+    },
+    {
+      "killed": true,
+      "killed_by": [
+        "test_root_mode_rejected[488]",
+        "test_root_mode_rejected[449]"
+      ],
+      "mutant": "root-mode"
+    },
+    {
+      "killed": true,
+      "killed_by": [
+        "test_root_foreign_owner_rejected"
+      ],
+      "mutant": "root-owner"
+    },
+    {
+      "killed": true,
+      "killed_by": [
+        "test_lock_on_one_store_does_not_unlock_another_through_dotdot_alias"
+      ],
+      "mutant": "connect-lexical-parent"
+    }
+  ],
+  "restore_green": true,
+  "seconds": 20.2,
+  "survived": [],
+  "tests": [
+    "tests/test_r11_coordination_forgers.py",
+    "tests/test_r9_context_attestation.py"
+  ]
+}

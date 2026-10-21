@@ -39,8 +39,8 @@ class _CoordinatedCursor(sqlite3.Cursor):
     """R9 cooperative gate on cursor statement execution (not a raw SQLite fence)."""
 
     def _check(self):
-        from .coordination import require_held
-        require_held(self.connection._guard_root)
+        from .coordination import require_held_key
+        require_held_key(self.connection._guard_key)
 
     def execute(self, *args, **kwargs):
         self._check()
@@ -63,8 +63,8 @@ class _CoordinatedConnection(sqlite3.Connection):
     """
 
     def _check(self):
-        from .coordination import require_held
-        require_held(self._guard_root)
+        from .coordination import require_held_key
+        require_held_key(self._guard_key)
 
     def cursor(self, *args, **kwargs):
         self._check()
@@ -104,14 +104,19 @@ def connect(
         raise TypeError("coordinated must be bool")
     # A new R8 connection must acknowledge the coordinated protocol. This is
     # NOT an enforcement mechanism against old versions or raw sqlite3.connect.
-    from .coordination import CoordinationRejected, initialized, require_held
-    parent = os.path.dirname(os.path.abspath(path))
+    from .coordination import CoordinationRejected, initialized, require_held_key, root_key
+    # R11: no os.path.abspath here. It removes ".." lexically while sqlite3 and
+    # the kernel resolve it after symlinks, so the guard could check a
+    # different directory than the one actually opened (SF-P3-03).
+    parent = os.path.dirname(os.fspath(path)) or os.curdir
+    key = None
     if initialized(parent):
         if not coordinated:
             raise ConfigurationError("coordinated store: use coordination.event_writer / ObjectStore(coordinated=True)")
         if os.path.basename(path) != 'safeforge.db':
             raise ConfigurationError("coordinated database must be root/safeforge.db")
-        require_held(parent)
+        key = root_key(parent)
+        require_held_key(key)
     elif coordinated:
         raise ConfigurationError("coordinated=True requires an initialized root")
     sync = synchronous.upper()
@@ -128,10 +133,18 @@ def connect(
                            isolation_level=None, factory=factory,
                            cached_statements=0 if coordinated else 128)
     if coordinated:
-        conn._guard_root = parent
+        # The directory checked above must still be the one sqlite3 opened.
+        try:
+            same = root_key(parent) == key
+        except CoordinationRejected:
+            same = False
+        if not same:
+            conn.close()
+            raise CoordinationRejected("store root changed while connecting")
+        conn._guard_key = key
         def _require_live_context(action, arg1, arg2, database_name, caller):
             try:
-                require_held(parent)
+                require_held_key(key)
             except CoordinationRejected:
                 return sqlite3.SQLITE_DENY
             return sqlite3.SQLITE_OK

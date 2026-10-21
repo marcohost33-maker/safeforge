@@ -95,7 +95,11 @@ def test_other_drive_is_disjoint_not_an_error(monkeypatch, tmp_path):
     from safeforge.offline_backup import _inside
 
     monkeypatch.setattr(os.path, "commonpath", commonpath)
-    assert _inside(tmp_path / "a", tmp_path / "b") is False
+    try:
+        inside = _inside(tmp_path / "a", tmp_path / "b")
+    except ValueError as exc:
+        raise AssertionError("other-drive pair raised instead of being disjoint: %s" % exc) from exc
+    assert inside is False
 
 
 # -- SF-R12-02 macOS F_FULLFSYNC ---------------------------------------------
@@ -198,9 +202,14 @@ def _coordinated(base):
 def test_missing_o_nofollow_refuses_instead_of_weakening(tmp_path, monkeypatch):
     root = _coordinated(tmp_path)
     monkeypatch.delattr(coordination.os, "O_NOFOLLOW")
-    with pytest.raises(CoordinationRejected, match="O_NOFOLLOW is required"):
+    try:
         with lock(root, exclusive=False):
             pass
+    except Exception as exc:  # noqa: BLE001 -- the type is what we assert on
+        assert type(exc) is CoordinationRejected and "O_NOFOLLOW is required" in str(exc), (
+            "not refused up front: %s(%s)" % (type(exc).__name__, exc))
+    else:
+        raise AssertionError("coordination ran without O_NOFOLLOW")
 
 
 @LINUX
@@ -246,8 +255,11 @@ def test_ownership_is_checked_against_the_effective_uid(tmp_path, monkeypatch):
     # differs (setuid helper) must still accept the store it initialized.
     root = _coordinated(tmp_path)
     monkeypatch.setattr(coordination.os, "getuid", lambda: os.geteuid() + 1)
-    with lock(root, exclusive=False):
-        pass
+    try:
+        with lock(root, exclusive=False):
+            pass
+    except CoordinationRejected as exc:
+        raise AssertionError("own store refused when real uid != effective uid: %s" % exc) from exc
 
 
 @LINUX

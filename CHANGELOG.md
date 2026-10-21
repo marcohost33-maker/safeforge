@@ -124,7 +124,12 @@ tests are process kills.
   exist there), all green on this head.
 - `experiments/dk_guard_mutants.py` (renamed from `dk_coordination_mutants.py`)
   now deletes 31 guards across coordination, containment and the durability
-  report: **31/31 killed**, as root and as an unprivileged user.
+  report: **31/31 killed**, as root and as an unprivileged user. A kill now
+  counts only when the test fails by assertion (read from JUnit XML), as in
+  Vero's `diskriminierung.py`; before, any red counted. That tool, run on
+  9a8c7fe, found three tests that went red only by crashing
+  (`CoordinationRejected`, `AttributeError`, `ValueError`); they now assert,
+  and the harness reproduces its 28/31 verdict on 9a8c7fe exactly.
 - Existence check (Survival-Item META-S14): the private Vero tool
   `diskriminierung.py` does the same job with a ledger; this repo keeps its own
   small harness because a public repo cannot depend on a private tool. It

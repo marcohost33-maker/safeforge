@@ -2,11 +2,11 @@
   "env": {
     "cpu_count": 4,
     "git_dirty": true,
-    "git_head": "c52a7b195c5fb6d79577afc1eb2559dff7aad554",
+    "git_head": "9a8c7fec9abec4c8769267139eff546363f1d2f4",
     "platform": "Linux-6.18.44-fc-v140-x86_64-with-glibc2.39",
     "python": "3.13.16",
     "sqlite": "3.45.1",
-    "utc": "2026-10-21T11:48:28Z"
+    "utc": "2026-10-21T11:57:04Z"
   },
   "euid": 0,
   "mutants": [
@@ -15,7 +15,8 @@
       "killed_by": [
         "test_marker_socket_rejected_by_type_check"
       ],
-      "mutant": "marker-type"
+      "mutant": "marker-type",
+      "red_by_crash": []
     },
     {
       "killed": true,
@@ -23,7 +24,8 @@
         "test_marker_hardlink_rejected_by_link_count",
         "test_corrupted_marker_refused[hardlink]"
       ],
-      "mutant": "marker-nlink"
+      "mutant": "marker-nlink",
+      "red_by_crash": []
     },
     {
       "killed": true,
@@ -31,14 +33,16 @@
         "test_marker_foreign_owner_rejected[chown]",
         "test_marker_foreign_owner_rejected[lstat-shim]"
       ],
-      "mutant": "marker-owner"
+      "mutant": "marker-owner",
+      "red_by_crash": []
     },
     {
       "killed": true,
       "killed_by": [
         "test_ownership_is_checked_against_the_effective_uid"
       ],
-      "mutant": "marker-owner-real-uid"
+      "mutant": "marker-owner-real-uid",
+      "red_by_crash": []
     },
     {
       "killed": true,
@@ -48,21 +52,24 @@
         "test_marker_group_or_other_bits_rejected[392]",
         "test_corrupted_marker_refused[permissions]"
       ],
-      "mutant": "marker-mode"
+      "mutant": "marker-mode",
+      "red_by_crash": []
     },
     {
       "killed": true,
       "killed_by": [
         "test_marker_symlink_swapped_in_after_lstat_rejected_by_nofollow"
       ],
-      "mutant": "marker-nofollow"
+      "mutant": "marker-nofollow",
+      "red_by_crash": []
     },
     {
       "killed": true,
       "killed_by": [
         "test_marker_regular_file_swapped_in_after_lstat_rejected_by_inode_check"
       ],
-      "mutant": "marker-inode"
+      "mutant": "marker-inode",
+      "red_by_crash": []
     },
     {
       "killed": true,
@@ -71,35 +78,40 @@
         "test_marker_changed_after_flock_rejected_by_second_check",
         "test_corrupted_marker_refused[contents]"
       ],
-      "mutant": "marker-content"
+      "mutant": "marker-content",
+      "red_by_crash": []
     },
     {
       "killed": true,
       "killed_by": [
         "test_marker_symlink_swapped_in_after_lstat_rejected_by_nofollow"
       ],
-      "mutant": "marker-oserror-map"
+      "mutant": "marker-oserror-map",
+      "red_by_crash": []
     },
     {
       "killed": true,
       "killed_by": [
         "test_marker_changed_after_flock_rejected_by_second_check"
       ],
-      "mutant": "marker-recheck-after-flock"
+      "mutant": "marker-recheck-after-flock",
+      "red_by_crash": []
     },
     {
       "killed": true,
       "killed_by": [
         "test_missing_o_nofollow_refuses_instead_of_weakening"
       ],
-      "mutant": "nofollow-required"
+      "mutant": "nofollow-required",
+      "red_by_crash": []
     },
     {
       "killed": true,
       "killed_by": [
         "test_lock_symlink_rejected_at_open"
       ],
-      "mutant": "lock-nofollow"
+      "mutant": "lock-nofollow",
+      "red_by_crash": []
     },
     {
       "killed": true,
@@ -107,21 +119,24 @@
         "test_lock_symlink_rejected_at_open",
         "test_lock_directory_rejected_at_open"
       ],
-      "mutant": "lock-oserror-map"
+      "mutant": "lock-oserror-map",
+      "red_by_crash": []
     },
     {
       "killed": true,
       "killed_by": [
         "test_lock_fifo_rejected_by_type_check"
       ],
-      "mutant": "lock-type"
+      "mutant": "lock-type",
+      "red_by_crash": []
     },
     {
       "killed": true,
       "killed_by": [
         "test_lock_hardlink_rejected_by_link_count"
       ],
-      "mutant": "lock-nlink"
+      "mutant": "lock-nlink",
+      "red_by_crash": []
     },
     {
       "killed": true,
@@ -129,7 +144,8 @@
         "test_lock_file_foreign_owner_rejected[chown]",
         "test_lock_file_foreign_owner_rejected[fstat-shim]"
       ],
-      "mutant": "lock-owner"
+      "mutant": "lock-owner",
+      "red_by_crash": []
     },
     {
       "killed": true,
@@ -137,28 +153,32 @@
         "test_lock_file_group_or_other_bits_rejected[416]",
         "test_lock_file_group_or_other_bits_rejected[388]"
       ],
-      "mutant": "lock-mode"
+      "mutant": "lock-mode",
+      "red_by_crash": []
     },
     {
       "killed": true,
       "killed_by": [
         "test_lock_replaced_after_open_rejected"
       ],
-      "mutant": "lock-replaced-after-flock"
+      "mutant": "lock-replaced-after-flock",
+      "red_by_crash": []
     },
     {
       "killed": true,
       "killed_by": [
         "test_root_symlink_rejected"
       ],
-      "mutant": "root-symlink"
+      "mutant": "root-symlink",
+      "red_by_crash": []
     },
     {
       "killed": true,
       "killed_by": [
         "test_root_regular_file_rejected"
       ],
-      "mutant": "root-isdir"
+      "mutant": "root-isdir",
+      "red_by_crash": []
     },
     {
       "killed": true,
@@ -166,7 +186,8 @@
         "test_root_mode_rejected[488]",
         "test_root_mode_rejected[449]"
       ],
-      "mutant": "root-mode"
+      "mutant": "root-mode",
+      "red_by_crash": []
     },
     {
       "killed": true,
@@ -174,7 +195,8 @@
         "test_root_foreign_owner_rejected[chown]",
         "test_root_foreign_owner_rejected[stat-shim]"
       ],
-      "mutant": "root-owner"
+      "mutant": "root-owner",
+      "red_by_crash": []
     },
     {
       "killed": true,
@@ -182,7 +204,8 @@
         "test_lock_on_one_store_does_not_unlock_another_through_dotdot_alias",
         "test_uncoordinated_connect_through_dotdot_alias_is_refused"
       ],
-      "mutant": "connect-lexical-parent"
+      "mutant": "connect-lexical-parent",
+      "red_by_crash": []
     },
     {
       "killed": true,
@@ -191,14 +214,16 @@
         "test_restore_into_backup_through_symlink_is_rejected_and_backup_stays_valid",
         "test_atomic_restore_into_backup_through_symlink_is_rejected"
       ],
-      "mutant": "containment-lexical"
+      "mutant": "containment-lexical",
+      "red_by_crash": []
     },
     {
       "killed": true,
       "killed_by": [
         "test_other_drive_is_disjoint_not_an_error"
       ],
-      "mutant": "containment-other-drive"
+      "mutant": "containment-other-drive",
+      "red_by_crash": []
     },
     {
       "killed": true,
@@ -206,14 +231,16 @@
         "test_darwin_fsync_uses_f_fullfsync_and_reports_fallback[False]",
         "test_darwin_fsync_uses_f_fullfsync_and_reports_fallback[True]"
       ],
-      "mutant": "darwin-fullfsync"
+      "mutant": "darwin-fullfsync",
+      "red_by_crash": []
     },
     {
       "killed": true,
       "killed_by": [
         "test_darwin_fsync_uses_f_fullfsync_and_reports_fallback[True]"
       ],
-      "mutant": "darwin-fallback-says-ok"
+      "mutant": "darwin-fallback-says-ok",
+      "red_by_crash": []
     },
     {
       "killed": true,
@@ -221,7 +248,8 @@
         "test_connect_sets_sqlite_fullfsync_on_macos[darwin-FULL-1]",
         "test_connect_sets_sqlite_fullfsync_on_macos[darwin-EXTRA-1]"
       ],
-      "mutant": "sqlite-fullfsync"
+      "mutant": "sqlite-fullfsync",
+      "red_by_crash": []
     },
     {
       "killed": true,
@@ -232,25 +260,28 @@
         "test_restore_reports_unsupported_dir_sync",
         "test_atomic_restore_keeps_an_inner_unsupported_status"
       ],
-      "mutant": "report-dir-syncs-dropped"
+      "mutant": "report-dir-syncs-dropped",
+      "red_by_crash": []
     },
     {
       "killed": true,
       "killed_by": [
         "test_report_surfaces_degraded_file_fsync"
       ],
-      "mutant": "report-file-syncs-dropped"
+      "mutant": "report-file-syncs-dropped",
+      "red_by_crash": []
     },
     {
       "killed": true,
       "killed_by": [
         "test_nested_summary_is_not_duplicated"
       ],
-      "mutant": "report-nested-split"
+      "mutant": "report-nested-split",
+      "red_by_crash": []
     }
   ],
   "restore_green": true,
-  "seconds": 47.6,
+  "seconds": 53.4,
   "survived": [],
   "tests": [
     "tests/test_r11_coordination_forgers.py",

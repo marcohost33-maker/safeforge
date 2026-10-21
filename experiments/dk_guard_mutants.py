@@ -13,12 +13,12 @@ Linux only (real flock, O_NOFOLLOW, chown when run as root).
 from __future__ import annotations
 
 import os
-import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
+from xml.etree import ElementTree
 
 from _common import save
 
@@ -94,12 +94,28 @@ def _copy() -> str:
     return dst
 
 
-def _run(tree: str) -> tuple[int, list[str]]:
+def _run(tree: str) -> tuple[int, list[tuple[str, bool]]]:
+    """Run the tests; return (exit code, [(failed test, failed by assertion?)]).
+
+    Like Vero's diskriminierung.py, only a test that fails by ASSERTION
+    discriminates: a test that dies of an unrelated exception would be red for
+    a reason that has nothing to do with the guard. The exception type comes
+    from JUnit XML; pytest's terminal summary truncates it to the line width.
+    """
+    report = os.path.join(tree, "junit.xml")
     proc = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-rf", *TESTS],
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "--junitxml", report, *TESTS],
         cwd=tree, capture_output=True, text=True, timeout=300,
     )
-    failed = re.findall(r"^FAILED (\S+)", proc.stdout, re.M)
+    failed = []
+    for case in ElementTree.parse(report).getroot().iter("testcase"):
+        for bad in [*case.findall("failure"), *case.findall("error")]:
+            # "AssertionError: msg", "Failed: DID NOT RAISE", or a rewritten bare
+            # "assert x == y" (no type prefix at all); anything else is a crash.
+            message = bad.get("message") or ""
+            by_assertion = message.startswith(("AssertionError", "Failed:", "assert "))
+            name = "%s::%s" % (case.get("classname", "").replace(".", "/") + ".py", case.get("name"))
+            failed.append((name, bad.tag == "failure" and by_assertion))
     return proc.returncode, failed
 
 
@@ -128,9 +144,12 @@ def main() -> int:
             finally:
                 with open(path, "w", encoding="utf-8") as f:
                     f.write(original)
-            killed = rc != 0 and bool(failed)
-            rows.append({"mutant": mid, "killed": killed, "killed_by": [x.split("::", 1)[-1] for x in failed]})
-            print("%-28s %s %s" % (mid, "KILLED " if killed else "SURVIVED", ", ".join(r for r in rows[-1]["killed_by"])))
+            by = [t.split("::", 1)[-1] for t, by_assert in failed if by_assert]
+            crashed = [t.split("::", 1)[-1] for t, by_assert in failed if not by_assert]
+            killed = rc != 0 and bool(by)
+            rows.append({"mutant": mid, "killed": killed, "killed_by": by, "red_by_crash": crashed})
+            verdict = "KILLED  " if killed else ("CRASH   " if crashed else "SURVIVED")
+            print("%-28s %s %s" % (mid, verdict, ", ".join(by or crashed)))
         rc, failed = _run(tree)
         restored = rc == 0
     finally:

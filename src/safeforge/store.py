@@ -200,6 +200,35 @@ def _file_matches(path: str, sha256: str, size: int) -> bool:
         return False
 
 
+def _missing_dirs(path: str) -> list[str]:
+    """``path`` and its ancestors that do not exist yet (what makedirs will create)."""
+    out = []
+    path = os.path.abspath(path)
+    while not os.path.lexists(path):
+        out.append(path)
+        parent = os.path.dirname(path)
+        if parent == path:
+            break
+        path = parent
+    return out
+
+
+def _sync_parents(created: list[str]) -> dict[str, str]:
+    """fsync the parent of every directory we created; report, never hide, a failure.
+
+    Returns ``{parent: status}`` with the statuses of :func:`durable.fsync_dir`
+    plus ``"failed:<error>"`` when the parent cannot be opened (e.g. a parent
+    with execute but no read permission).
+    """
+    out: dict[str, str] = {}
+    for parent in sorted({os.path.dirname(d) for d in created}, key=len, reverse=True):
+        try:
+            out[parent] = durable.fsync_dir(parent)
+        except OSError as e:
+            out[parent] = "failed:%s" % (e.strerror or e.__class__.__name__)
+    return out
+
+
 def _young(path: str, cutoff: float) -> bool:
     """True if modified after ``cutoff`` -- or already gone (nothing to delete then)."""
     try:
@@ -221,7 +250,15 @@ def _check_private_path(path: str, *, directory: bool) -> None:
 
 
 class ObjectStore:
-    """One instance per thread (it owns one SQLite connection)."""
+    """One instance per thread (it owns one SQLite connection).
+
+    ``synchronous`` must stay FULL (the default) for an acknowledged ingest to
+    survive a power cut: under NORMAL the WAL is not synced at commit, and the
+    LazyFS test shows an acknowledged upload lost entirely
+    (tests/test_powerloss_lazyfs.py). NORMAL survives process crashes only.
+    ``layout_sync`` reports the fsyncs of the parents of directories this
+    instance created (SF-R14-01).
+    """
 
     def __init__(
         self,
@@ -263,6 +300,7 @@ class ObjectStore:
             # restore root; external clients bypassing this API are NOT protected.
             if os.path.lexists(os.path.join(root, "RESTORE_IN_PROGRESS")):
                 raise IngestError("restore root is incomplete; do not open")
+            created = _missing_dirs(root)
             os.makedirs(root, mode=0o700, exist_ok=True)
             if enforce_private:
                 # Reject an already-accessible root BEFORE touching child paths.
@@ -275,8 +313,14 @@ class ObjectStore:
                 for directory in (self.objects_dir, self.staging_dir):
                     if os.path.lexists(directory):
                         _check_private_path(directory, directory=True)
+            created += _missing_dirs(self.objects_dir) + _missing_dirs(self.staging_dir)
             os.makedirs(self.objects_dir, mode=0o700, exist_ok=True)
             os.makedirs(self.staging_dir, mode=0o700, exist_ok=True)
+            # SF-R14-01: a new directory's entry lives in its parent. Without
+            # this a power cut can drop objects/ (or root itself) together with
+            # every object acknowledged inside it; publish() only syncs
+            # objects/ and staging/, never their parents.
+            self.layout_sync = _sync_parents(created)
             # Publication must stay on one filesystem. Refuse a staging area on
             # another volume (e.g. /tmp on tmpfs) up front instead of failing with
             # EXDEV per upload -- or worse, silently degrading to copy+delete.

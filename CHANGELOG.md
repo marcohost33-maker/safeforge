@@ -6,6 +6,35 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### R25 (2026-10-23): a failed layout fsync blocks every ACK
+
+- **Fixed SF-R25-01 (P1, cross-family review R25)**: R14 only *recorded* a
+  failed parent fsync as `layout_sync[parent] = "failed:<error>"`; the store
+  opened anyway and `ingest()` -- including an idempotency replay -- acknowledged
+  objects whose directory entries were never proven durable. A reopen synced
+  nothing (`created == []`) and lost even the record. Now:
+  - `ObjectStore.__init__` raises `LayoutNotDurable` (an `IngestError`,
+    exported from `safeforge`) when any parent fsync raises; the exception
+    carries the full `layout_sync` report, failed parents as `"failed:..."`.
+    No store object exists, so no ACK path can run.
+  - Every open re-syncs the parents of root/, objects/ and staging/, not only
+    of directories it created, so a layout left unproven by a failed or
+    crashed earlier open is proven again -- or refused -- after a restart.
+  - `"unsupported:"` (Windows) and `"degraded:"` (macOS without F_FULLFSYNC)
+    do not block, the same treatment the per-ingest directory fsync gets in
+    `ingest()`, where only a raising `fsync_dir` prevents the ACK.
+  - **Behaviour change:** a root whose parent cannot be opened for reading
+    (execute-only) no longer opens with a `"failed:"` status; it is refused.
+  - Remaining gap: ancestors *above* root's parent that an earlier open
+    created are not re-synced on reopen (the store cannot tell them from
+    pre-existing ones).
+  Tests: `tests/test_r25_layout_ack_gate.py` (fault injection via
+  `durable.fsync_dir`, each test asserts its fake was called; positive
+  controls for ok/unsupported/degraded), R14 tests adapted to the new
+  contract and no longer skipped on Windows. Red at 19d973f, green after.
+  Not tested: a real power cut with a failing fsync; Linux/macOS runs of the
+  new tests are left to CI.
+
 ### R14 (2026-10-22): power-cut tests, layout durability
 
 Closes the open item "power cut untested" from the R13 handoff as far as

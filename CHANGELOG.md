@@ -6,6 +6,67 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### R25 (2026-10-23): a failed layout fsync blocks every ACK
+
+- **Fixed SF-R25-01 (P1, cross-family review R25)**: R14 only *recorded* a
+  failed parent fsync as `layout_sync[parent] = "failed:<error>"`; the store
+  opened anyway and `ingest()` -- including an idempotency replay -- acknowledged
+  objects whose directory entries were never proven durable. A reopen synced
+  nothing (`created == []`) and lost even the record. Now:
+  - `ObjectStore.__init__` raises `LayoutNotDurable` (an `IngestError`,
+    exported from `safeforge`) when any parent fsync raises; the exception
+    carries the full `layout_sync` report, failed parents as `"failed:..."`.
+    No store object exists, so no ACK path can run.
+  - Every open re-syncs the parents of root/, objects/ and staging/, not only
+    of directories it created, so a layout left unproven by a failed or
+    crashed earlier open is proven again -- or refused -- after a restart.
+  - `"unsupported:"` (Windows) and `"degraded:"` (macOS without F_FULLFSYNC)
+    do not block, the same treatment the per-ingest directory fsync gets in
+    `ingest()`, where only a raising `fsync_dir` prevents the ACK.
+  - **Behaviour change:** a root whose parent cannot be opened for reading
+    (execute-only) no longer opens with a `"failed:"` status; it is refused.
+  - Remaining gap: ancestors *above* root's parent that an earlier open
+    created are not re-synced on reopen (the store cannot tell them from
+    pre-existing ones).
+  Tests: `tests/test_r25_layout_ack_gate.py` (fault injection via
+  `durable.fsync_dir`, each test asserts its fake was called; positive
+  controls for ok/unsupported/degraded), R14 tests adapted to the new
+  contract and no longer skipped on Windows. Red at 19d973f, green after.
+  Not tested: a real power cut with a failing fsync; Linux/macOS runs of the
+  new tests are left to CI.
+
+### R14 (2026-10-22): power-cut tests, layout durability
+
+Closes the open item "power cut untested" from the R13 handoff as far as
+software simulation reaches; it is still not a proof (see README).
+
+- **Added** `tests/test_powerloss_lazyfs.py`: crash at each of 9 failpoints,
+  then LazyFS `clear-cache` (all unsynced bytes, SQLite WAL included, are
+  dropped), then reconcile. Shipped writer: invariants hold everywhere, the
+  acknowledged object is intact. Negative controls: without the staging fsync
+  the acknowledged object comes back corrupt (`missing_or_corrupt`); with
+  `synchronous=NORMAL` the acknowledged upload is lost. A canary file proves
+  each cut dropped data. LazyFS pinned to commit `fa7d32e`
+  (`experiments/lazyfs/build_lazyfs.sh`, spdlog/toml11 pinned too); new CI
+  job `powerloss` with `SAFEFORGE_LAZYFS_REQUIRED=1` so a broken setup fails.
+- **Added** `tests/test_powerloss_dirmodel.py`: LazyFS persists directory
+  operations immediately (measured), so lost directory entries are covered by
+  a model: every entry created or removed since the directory's last real
+  fsync may independently survive or vanish (traced by
+  `tests/powerloss_driver.py`). 17 states over 9 failpoints, all pass; a
+  writer without the directory fsyncs loses the acknowledged object.
+- **Fixed SF-R14-01 (P3)**: `ObjectStore.__init__` created root/, objects/
+  and staging/ without fsyncing their parents, so a power cut soon after the
+  first acknowledged upload could remove the directory holding it. Parents of
+  every directory the store creates are now fsync'ed; the result is reported
+  in `ObjectStore.layout_sync` (`"failed:<error>"` if a parent cannot be
+  opened, e.g. execute-only) instead of being hidden. Red at 6e35d71, green
+  after (`tests/test_r14_layout_durability.py`).
+- LazyFS quirk documented in `tests/lazyfs_harness.py`: a `--config-path`
+  containing "-o" (e.g. `/tmp/pytest-of-root/...`) is silently replaced by
+  `config/default.toml`; its completion FIFO is opened once and must stay
+  open on the reader side.
+
 Integration of the cumulative R2–R9 hardening from an external cross-family
 review. **Status: best-effort cooperative hardening of a reference
 implementation. Production: NO GO.** The coordination lock is an advisory

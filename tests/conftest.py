@@ -36,3 +36,14 @@ def _clear_failpoints():
     _faults.set_hook(None)
     yield
     _faults.set_hook(None)
+
+
+def run_powerloss(root: str, point: str, mutant: str, trace: str, nbytes: int = 65536):
+    """Run tests.powerloss_driver in a child. Returns (returncode, acked_id|None, stderr)."""
+    args = [sys.executable, "-m", "tests.powerloss_driver", root, point, mutant, trace, str(nbytes)]
+    p = subprocess.run(args, cwd=REPO, env=child_env(), stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120)
+    ack = None
+    for line in p.stdout.splitlines():
+        if line.startswith("ACK "):
+            ack = line.split()[1]
+    return p.returncode, ack, p.stderr

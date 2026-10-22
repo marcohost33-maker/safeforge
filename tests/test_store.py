@@ -114,8 +114,9 @@ def test_idempotency_key_dedups(store, tmp_path):
 def test_idempotency_key_with_different_content_conflicts(store):
     store.ingest(io.BytesIO(b"one"), max_bytes=10, idempotency_key="upload-2")
     with pytest.raises(IdempotencyConflict):
-        store.ingest(io.BytesIO(b"two"), max_bytes=10, idempotency_key="upload-2",
-                     expected_sha256=hashlib.sha256(b"two").hexdigest())
+        store.ingest(
+            io.BytesIO(b"two"), max_bytes=10, idempotency_key="upload-2", expected_sha256=hashlib.sha256(b"two").hexdigest()
+        )
 
 
 def test_path_of_refuses_unknown_and_malformed(store):
@@ -136,33 +137,53 @@ def test_step_order_fsync_publish_dirsync_commit(monkeypatch, store):
     real_ff, real_pub, real_fd = durable.fsync_file, durable.publish, durable.fsync_dir
     monkeypatch.setattr(durable, "fsync_file", lambda f: (events.append("fsync_file"), real_ff(f))[1])
     monkeypatch.setattr(durable, "publish", lambda a, b: (events.append("publish"), real_pub(a, b))[1])
-    monkeypatch.setattr(durable, "fsync_dir",
-                        lambda d: (events.append("fsync_dir:" + os.path.basename(d)), real_fd(d))[1])
+    monkeypatch.setattr(durable, "fsync_dir", lambda d: (events.append("fsync_dir:" + os.path.basename(d)), real_fd(d))[1])
     _faults.set_hook(lambda name: events.append(name) if name in ("intent.committed", "status.committed") else None)
     store.ingest(io.BytesIO(b"order"), max_bytes=10)
-    assert events == ["fsync_file", "intent.committed", "publish", "fsync_dir:objects",
-                      "fsync_dir:staging", "status.committed"]
+    assert events == ["fsync_file", "intent.committed", "publish", "fsync_dir:objects", "fsync_dir:staging", "status.committed"]
 
 
-def test_fsync_file_really_calls_os_fsync(monkeypatch, tmp_path):
+def _record_syncs(monkeypatch) -> list:
+    """Record each sync primitive as (name, fd): os.fsync, and on macOS F_FULLFSYNC.
+
+    R12: on macOS durable issues fcntl(F_FULLFSYNC), because fsync(2) there
+    does not flush the drive cache; plain os.fsync is only the fallback.
+    """
     calls = []
     real = os.fsync
-    monkeypatch.setattr(os, "fsync", lambda fd: (calls.append(fd), real(fd))[1])
+    monkeypatch.setattr(os, "fsync", lambda fd: (calls.append(("fsync", fd)), real(fd))[1])
+    if sys.platform == "darwin":
+        import fcntl
+
+        real_fcntl = fcntl.fcntl
+
+        def spy(fd, cmd, *a):
+            if cmd == fcntl.F_FULLFSYNC:
+                calls.append(("F_FULLFSYNC", fd))
+            return real_fcntl(fd, cmd, *a)
+
+        monkeypatch.setattr(fcntl, "fcntl", spy)
+    return calls
+
+
+EXPECTED_SYNC = "F_FULLFSYNC" if sys.platform == "darwin" else "fsync"
+
+
+def test_fsync_file_really_syncs(monkeypatch, tmp_path):
+    calls = _record_syncs(monkeypatch)
     with open(tmp_path / "f", "wb") as f:
         f.write(b"x")
-        durable.fsync_file(f)
-        assert calls == [f.fileno()]
+        assert durable.fsync_file(f) == "ok"
+        assert calls == [(EXPECTED_SYNC, f.fileno())]
 
 
 def test_fsync_dir_reports_platform_truthfully(tmp_path, monkeypatch):
-    calls = []
-    real = os.fsync
-    monkeypatch.setattr(os, "fsync", lambda fd: (calls.append(fd), real(fd))[1])
+    calls = _record_syncs(monkeypatch)
     status = durable.fsync_dir(str(tmp_path))
     if sys.platform == "win32":
         assert status.startswith("unsupported:") and calls == []
     else:
-        assert status == "ok" and len(calls) == 1
+        assert status == "ok" and [name for name, _ in calls] == [EXPECTED_SYNC]
 
 
 def test_ingest_result_reports_dir_sync(store):

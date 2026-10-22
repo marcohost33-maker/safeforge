@@ -93,8 +93,18 @@ def main():
         ratios[p] = round(res["mmap_256MiB"][p]["median_cpu_s"] / res["mmap_0"][p]["median_cpu_s"], 4)
         print("%-8s cpu ratio mmap/no-mmap = %.3f" % (p, ratios[p]))
     print("db size %.1f MiB, effective mmap_size %s" % (size / 2**20, effective))
-    print(save("mmap", {"params": vars(a), "db_bytes": size, "effective_mmap_size": effective,
-                        "phases": res, "cpu_ratio_mmap_over_none": ratios}))
+    print(
+        save(
+            "mmap",
+            {
+                "params": vars(a),
+                "db_bytes": size,
+                "effective_mmap_size": effective,
+                "phases": res,
+                "cpu_ratio_mmap_over_none": ratios,
+            },
+        )
+    )
 
 
 if __name__ == "__main__":

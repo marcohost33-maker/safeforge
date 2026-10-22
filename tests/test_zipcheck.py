@@ -163,10 +163,10 @@ def _set_encrypted_flag(raw: bytes) -> bytes:
     """zipfile cannot write encrypted entries; set bit 0 of the general-purpose
     flags in the first central-directory record (that is where readers look)."""
     eocd = raw.rfind(b"PK\x05\x06")
-    cd_off = struct.unpack("<I", raw[eocd + 16: eocd + 20])[0]
+    cd_off = struct.unpack("<I", raw[eocd + 16 : eocd + 20])[0]
     b = bytearray(raw)
-    flags = struct.unpack("<H", b[cd_off + 8: cd_off + 10])[0]
-    b[cd_off + 8: cd_off + 10] = struct.pack("<H", flags | 0x1)
+    flags = struct.unpack("<H", b[cd_off + 8 : cd_off + 10])[0]
+    b[cd_off + 8 : cd_off + 10] = struct.pack("<H", flags | 0x1)
     return bytes(b)
 
 
@@ -211,15 +211,15 @@ def _dup_central_record(raw: bytes) -> bytes:
     """Append a second central-directory record that points at the SAME local
     header as the first one (shared data = overlapping entries)."""
     eocd = raw.rfind(b"PK\x05\x06")
-    cd_size, cd_off = struct.unpack("<II", raw[eocd + 12: eocd + 20])
+    cd_size, cd_off = struct.unpack("<II", raw[eocd + 12 : eocd + 20])
     first = cd_off
-    n_len, x_len, c_len = struct.unpack("<HHH", raw[first + 28: first + 34])
-    rec = bytearray(raw[first: first + 46 + n_len + x_len + c_len])
-    name = bytes(rec[46: 46 + n_len])
+    n_len, x_len, c_len = struct.unpack("<HHH", raw[first + 28 : first + 34])
+    rec = bytearray(raw[first : first + 46 + n_len + x_len + c_len])
+    name = bytes(rec[46 : 46 + n_len])
     new_name = b"Z" + name[1:]
-    rec[46: 46 + n_len] = new_name
-    cd = raw[cd_off: cd_off + cd_size] + bytes(rec)
-    n_entries = struct.unpack("<H", raw[eocd + 10: eocd + 12])[0] + 1
+    rec[46 : 46 + n_len] = new_name
+    cd = raw[cd_off : cd_off + cd_size] + bytes(rec)
+    n_entries = struct.unpack("<H", raw[eocd + 10 : eocd + 12])[0] + 1
     tail = bytearray(raw[eocd:])
     tail[8:10] = struct.pack("<H", n_entries)
     tail[10:12] = struct.pack("<H", n_entries)
@@ -234,10 +234,10 @@ def test_overlapping_entries_rejected():
 def _shrink_declared_size(raw: bytes) -> bytes:
     """Lie in the central directory: declare 'index.html' 5 bytes shorter."""
     eocd = raw.rfind(b"PK\x05\x06")
-    cd_off = struct.unpack("<I", raw[eocd + 16: eocd + 20])[0]
+    cd_off = struct.unpack("<I", raw[eocd + 16 : eocd + 20])[0]
     b = bytearray(raw)
-    real = struct.unpack("<I", b[cd_off + 24: cd_off + 28])[0]
-    b[cd_off + 24: cd_off + 28] = struct.pack("<I", real - 5)
+    real = struct.unpack("<I", b[cd_off + 24 : cd_off + 28])[0]
+    b[cd_off + 24 : cd_off + 28] = struct.pack("<I", real - 5)
     return bytes(b)
 
 
@@ -255,10 +255,10 @@ def test_lying_size_header_is_caught_by_full_pass():
 def _grow_declared_size(raw: bytes) -> bytes:
     """Lie the other way: declare 'index.html' 5 bytes LONGER than its data."""
     eocd = raw.rfind(b"PK\x05\x06")
-    cd_off = struct.unpack("<I", raw[eocd + 16: eocd + 20])[0]
+    cd_off = struct.unpack("<I", raw[eocd + 16 : eocd + 20])[0]
     b = bytearray(raw)
-    real = struct.unpack("<I", b[cd_off + 24: cd_off + 28])[0]
-    b[cd_off + 24: cd_off + 28] = struct.pack("<I", real + 5)
+    real = struct.unpack("<I", b[cd_off + 24 : cd_off + 28])[0]
+    b[cd_off + 24 : cd_off + 28] = struct.pack("<I", real + 5)
     return bytes(b)
 
 

@@ -24,18 +24,36 @@ class Layout:
 
 
 def corrected(root: str) -> Layout:
-    return Layout(os.path.join(root, "safeforge.db"), "objects", os.path.join(root, "objects"),
-                  os.path.join(root, "staging"), "stored", ("stored", "failed"))
+    return Layout(
+        os.path.join(root, "safeforge.db"),
+        "objects",
+        os.path.join(root, "objects"),
+        os.path.join(root, "staging"),
+        "stored",
+        ("stored", "failed"),
+    )
 
 
 def v03(root: str, staging_dir: str | None = None) -> Layout:
-    return Layout(os.path.join(root, "v03.db"), "uploads", os.path.join(root, "quarantine"),
-                  staging_dir or os.path.join(root, "staging"), "quarantine", ("quarantine", "failed"))
+    return Layout(
+        os.path.join(root, "v03.db"),
+        "uploads",
+        os.path.join(root, "quarantine"),
+        staging_dir or os.path.join(root, "staging"),
+        "quarantine",
+        ("quarantine", "failed"),
+    )
 
 
 def naive(root: str) -> Layout:
-    return Layout(os.path.join(root, "naive.db"), "objects", os.path.join(root, "objects"),
-                  os.path.join(root, "staging"), "stored", ("stored",))
+    return Layout(
+        os.path.join(root, "naive.db"),
+        "objects",
+        os.path.join(root, "objects"),
+        os.path.join(root, "staging"),
+        "stored",
+        ("stored",),
+    )
 
 
 def _sha(path: str) -> str:

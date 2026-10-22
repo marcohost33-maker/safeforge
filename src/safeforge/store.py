@@ -57,6 +57,7 @@ __all__ = [
     "IngestInFlight",
     "IngestAborted",
     "IdempotencyConflict",
+    "LayoutNotDurable",
 ]
 
 _ID_RE = re.compile(r"^[0-9a-f]{32}$")
@@ -104,6 +105,19 @@ class IdempotencyConflict(IngestError):
     """The idempotency key was already used for different content."""
 
 
+class LayoutNotDurable(IngestError):
+    """A store directory's entry could not be fsync'ed in its parent; the store does not open.
+
+    SF-R25-01: an opened store can acknowledge ingests, so it must not exist
+    while root/, objects/ or staging/ may vanish in a power cut. ``layout_sync``
+    keeps every parent's status, the failed ones as ``"failed:<error>"``.
+    """
+
+    def __init__(self, message: str, layout_sync: dict[str, str]) -> None:
+        super().__init__(message)
+        self.layout_sync = dict(layout_sync)
+
+
 @dataclass(frozen=True)
 class IngestResult:
     object_id: str
@@ -112,6 +126,13 @@ class IngestResult:
     deduplicated: bool
     publish: str = ""
     dir_sync: str = ""
+    # SF-R27-01: the ACK above is logical (the database says stored). Whether it also survives a power
+    # cut is a separate claim: True only if the object file, objects/ and staging/ all synced "ok" and
+    # SQLite runs synchronous FULL or EXTRA. Windows ("unsupported:") and macOS without F_FULLFSYNC
+    # ("degraded:") stay False; a deduplicated result attests nothing about the earlier ingest.
+    file_sync: str = ""
+    staging_sync: str = ""
+    powercut_durable: bool = False
 
 
 @dataclass
@@ -190,11 +211,45 @@ def _file_matches(path: str, sha256: str, size: int) -> bool:
                 h.update(chunk)
             # Catch a path swap or in-place size mutation during hashing.
             opened, after = os.fstat(f.fileno()), os.lstat(path)
-            return (stat.S_ISREG(after.st_mode) and
-                    (opened.st_dev, opened.st_ino) == (after.st_dev, after.st_ino) and
-                    opened.st_size == size and h.hexdigest() == sha256)
+            return (
+                stat.S_ISREG(after.st_mode)
+                and (opened.st_dev, opened.st_ino) == (after.st_dev, after.st_ino)
+                and opened.st_size == size
+                and h.hexdigest() == sha256
+            )
     except (OSError, ValueError):
         return False
+
+
+def _missing_dirs(path: str) -> list[str]:
+    """``path`` and its ancestors that do not exist yet (what makedirs will create)."""
+    out = []
+    path = os.path.abspath(path)
+    while not os.path.lexists(path):
+        out.append(path)
+        parent = os.path.dirname(path)
+        if parent == path:
+            break
+        path = parent
+    return out
+
+
+def _sync_parents(dirs: list[str]) -> dict[str, str]:
+    """fsync the parent of every directory in ``dirs``; report, never hide, a failure.
+
+    Returns ``{parent: status}`` with the statuses of :func:`durable.fsync_dir`
+    plus ``"failed:<error>"`` when it raises (e.g. a parent with execute but
+    no read permission, or EIO). Every parent is attempted, so the report is
+    complete; the caller decides -- :class:`ObjectStore` refuses to open on any
+    ``"failed:"`` (SF-R25-01).
+    """
+    out: dict[str, str] = {}
+    for parent in sorted({os.path.dirname(d) for d in dirs}, key=len, reverse=True):
+        try:
+            out[parent] = durable.fsync_dir(parent)
+        except OSError as e:
+            out[parent] = "failed:%s" % (e.strerror or e.__class__.__name__)
+    return out
 
 
 def _young(path: str, cutoff: float) -> bool:
@@ -218,7 +273,16 @@ def _check_private_path(path: str, *, directory: bool) -> None:
 
 
 class ObjectStore:
-    """One instance per thread (it owns one SQLite connection)."""
+    """One instance per thread (it owns one SQLite connection).
+
+    ``synchronous`` must stay FULL (the default) for an acknowledged ingest to
+    survive a power cut: under NORMAL the WAL is not synced at commit, and the
+    LazyFS test shows an acknowledged upload lost entirely
+    (tests/test_powerloss_lazyfs.py). NORMAL survives process crashes only.
+    ``layout_sync`` reports the fsyncs of the parents of root/, objects/,
+    staging/ and of every directory this instance created (SF-R14-01); a
+    failed one raises :class:`LayoutNotDurable` instead (SF-R25-01).
+    """
 
     def __init__(
         self,
@@ -239,15 +303,16 @@ class ObjectStore:
             raise ValueError("enforce_private requires POSIX permission semantics")
         root = os.path.abspath(root)
         from . import coordination
+
         if coordination.initialized(root) != coordinated:
             raise IngestError("coordination mode mismatch; migrate/opt in explicitly")
         if coordinated:
             # The offline backup snapshots ONLY root/safeforge.db and root/staging.
             # Arbitrary auxiliary paths would silently escape its inventory.
-            if db_path is not None and os.path.abspath(db_path) != os.path.join(root, 'safeforge.db'):
-                raise IngestError('coordinated mode requires database inside store root')
-            if staging_dir is not None and os.path.abspath(staging_dir) != os.path.join(root, 'staging'):
-                raise IngestError('coordinated mode requires canonical staging directory')
+            if db_path is not None and os.path.abspath(db_path) != os.path.join(root, "safeforge.db"):
+                raise IngestError("coordinated mode requires database inside store root")
+            if staging_dir is not None and os.path.abspath(staging_dir) != os.path.join(root, "staging"):
+                raise IngestError("coordinated mode requires canonical staging directory")
         self._coordinated_lock = None
         if coordinated:
             # A live, long-lived store holds SH across *all* writes and
@@ -259,6 +324,7 @@ class ObjectStore:
             # restore root; external clients bypassing this API are NOT protected.
             if os.path.lexists(os.path.join(root, "RESTORE_IN_PROGRESS")):
                 raise IngestError("restore root is incomplete; do not open")
+            created = _missing_dirs(root)
             os.makedirs(root, mode=0o700, exist_ok=True)
             if enforce_private:
                 # Reject an already-accessible root BEFORE touching child paths.
@@ -271,8 +337,28 @@ class ObjectStore:
                 for directory in (self.objects_dir, self.staging_dir):
                     if os.path.lexists(directory):
                         _check_private_path(directory, directory=True)
+            created += _missing_dirs(self.objects_dir) + _missing_dirs(self.staging_dir)
             os.makedirs(self.objects_dir, mode=0o700, exist_ok=True)
             os.makedirs(self.staging_dir, mode=0o700, exist_ok=True)
+            # SF-R14-01: a new directory's entry lives in its parent. Without
+            # this a power cut can drop objects/ (or root itself) together with
+            # every object acknowledged inside it; publish() only syncs
+            # objects/ and staging/, never their parents.
+            # SF-R25-01: a failure must stop the store, not just be recorded --
+            # an open store acknowledges ingests and idempotency replays. And
+            # the parents are re-synced on EVERY open, not only when this call
+            # created something: after a failed or crashed earlier open the
+            # layout exists (created == []) but was never proven durable. The
+            # extra fsyncs are idempotent and cheap. Platform statuses
+            # ("unsupported:" on Windows, "degraded:" on macOS) pass, as in
+            # ingest(), where only a raising fsync_dir prevents the ACK.
+            self.layout_sync = _sync_parents(created + [root, self.objects_dir, self.staging_dir])
+            failed = sorted(p for p, s in self.layout_sync.items() if s.startswith("failed:"))
+            if failed:
+                raise LayoutNotDurable(
+                    "store layout not durable: directory fsync failed for %s" % ", ".join(failed),
+                    self.layout_sync,
+                )
             # Publication must stay on one filesystem. Refuse a staging area on
             # another volume (e.g. /tmp on tmpfs) up front instead of failing with
             # EXDEV per upload -- or worse, silently degrading to copy+delete.
@@ -288,8 +374,10 @@ class ObjectStore:
                     fd = os.open(self.db_path, flags, 0o600)
                     os.close(fd)
                 _check_private_path(self.db_path, directory=False)
-            self._conn = db.connect(self.db_path, synchronous=synchronous,
-                                    busy_timeout_ms=busy_timeout_ms, coordinated=coordinated)
+            self._conn = db.connect(
+                self.db_path, synchronous=synchronous, busy_timeout_ms=busy_timeout_ms, coordinated=coordinated
+            )
+            self._commit_survives_power_cut = synchronous.upper() in ("FULL", "EXTRA")
             with db.transaction(self._conn):
                 for stmt in filter(None, (s.strip() for s in _SCHEMA.split(";"))):
                     self._conn.execute(stmt)
@@ -365,9 +453,7 @@ class ObjectStore:
         """
         if not isinstance(oid, str) or not _ID_RE.fullmatch(oid):
             raise KeyError(oid)
-        row = self._conn.execute(
-            "SELECT sha256, size FROM objects WHERE id=? AND status='stored'", (oid,)
-        ).fetchone()
+        row = self._conn.execute("SELECT sha256, size FROM objects WHERE id=? AND status='stored'", (oid,)).fetchone()
         if row is None:
             raise KeyError(oid)
         try:
@@ -382,9 +468,12 @@ class ObjectStore:
             for chunk in iter(lambda: f.read(1 << 20), b""):
                 h.update(chunk)
             opened, after = os.fstat(f.fileno()), os.lstat(self._obj(oid))
-            if ((opened.st_dev, opened.st_ino) != (after.st_dev, after.st_ino)
-                    or not stat.S_ISREG(after.st_mode) or opened.st_size != size
-                    or h.hexdigest() != sha):
+            if (
+                (opened.st_dev, opened.st_ino) != (after.st_dev, after.st_ino)
+                or not stat.S_ISREG(after.st_mode)
+                or opened.st_size != size
+                or h.hexdigest() != sha
+            ):
                 raise IngestError("stored object digest or identity mismatch")
             f.seek(0)
             return f
@@ -409,9 +498,7 @@ class ObjectStore:
                 raise ValueError("%s must be a positive int" % name)
         if expected_sha256 is not None and (not isinstance(expected_sha256, str) or not _SHA_RE.fullmatch(expected_sha256)):
             raise ValueError("expected_sha256 must be 64 lowercase hex chars")
-        if idempotency_key is not None and (
-            not isinstance(idempotency_key, str) or not 0 < len(idempotency_key) <= 256
-        ):
+        if idempotency_key is not None and (not isinstance(idempotency_key, str) or not 0 < len(idempotency_key) <= 256):
             raise ValueError("idempotency_key must be a non-empty str of at most 256 chars")
 
         if idempotency_key is not None:
@@ -454,7 +541,7 @@ class ObjectStore:
                     f.write(chunk)
                     _faults.point("staging.chunk")
                 _faults.point("staging.written")
-                durable.fsync_file(f)
+                fsync_status = durable.fsync_file(f)
             _faults.point("staging.fsynced")
             digest = h.hexdigest()
             if expected_sha256 is not None and digest != expected_sha256:
@@ -488,7 +575,7 @@ class ObjectStore:
             mech = durable.publish(spath, opath)
             _faults.point("object.published")
             dsync = durable.fsync_dir(self.objects_dir)
-            durable.fsync_dir(self.staging_dir)
+            ssync = durable.fsync_dir(self.staging_dir)
             _faults.point("dirs.fsynced")
             # (5) conditional status commit
             with db.transaction(self._conn):
@@ -504,7 +591,8 @@ class ObjectStore:
         except BaseException:
             self._abort(oid)
             raise
-        return IngestResult(oid, digest, size, False, mech, dsync)
+        durable_ack = self._commit_survives_power_cut and fsync_status == dsync == ssync == "ok"
+        return IngestResult(oid, digest, size, False, mech, dsync, fsync_status, ssync, durable_ack)
 
     def _dedup(self, hit: tuple[str, str, str, int], digest: str | None) -> IngestResult:
         oid, status, sha, size = hit
@@ -531,7 +619,10 @@ class ObjectStore:
             pass  # the reconciler resolves whatever is left
 
     def reconcile(
-        self, *, grace_seconds: float = 300.0, now: float | None = None,
+        self,
+        *,
+        grace_seconds: float = 300.0,
+        now: float | None = None,
         verify_stored_digests: bool = False,
     ) -> ReconcileReport:
         """Bring disk and database back into agreement. Idempotent.
@@ -615,11 +706,9 @@ class ObjectStore:
                 rep.skipped.append("%s: %s" % (path, e))
 
         # (d) stored rows whose file is gone or wrong: cannot be repaired, only reported.
-        for oid, size in self._conn.execute(
-            "SELECT id, size FROM objects WHERE status='stored'"
-        ).fetchall():
+        for oid, size in self._conn.execute("SELECT id, size FROM objects WHERE status='stored'").fetchall():
             p = self._obj(oid)
-            if (os.path.islink(p) or not os.path.isfile(p) or os.path.getsize(p) != size):
+            if os.path.islink(p) or not os.path.isfile(p) or os.path.getsize(p) != size:
                 rep.missing_or_corrupt.append(oid)
             elif verify_stored_digests:
                 row = self._conn.execute("SELECT sha256 FROM objects WHERE id=?", (oid,)).fetchone()
@@ -630,9 +719,7 @@ class ObjectStore:
     def verify(self) -> list[str]:
         """Full re-hash of every stored object. Returns the ids that do not match."""
         bad = []
-        for oid, sha, size in self._conn.execute(
-            "SELECT id, sha256, size FROM objects WHERE status='stored'"
-        ).fetchall():
+        for oid, sha, size in self._conn.execute("SELECT id, sha256, size FROM objects WHERE status='stored'").fetchall():
             if not _file_matches(self._obj(oid), sha, size):
                 bad.append(oid)
         return bad

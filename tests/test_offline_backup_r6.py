@@ -26,7 +26,11 @@ def test_backup_and_restore_bytes_and_sqlite_rows(tmp_path):
         backup_offline(src, archive)
     report = backup_offline(src, archive, confirmed_quiescent=True)
     assert report["stored_objects"] == 2
-    assert verify_backup(archive) == report
+    # The backup report adds what its fsyncs did (R11/R12); a later
+    # read-only verify cannot know that and reports integrity only.
+    verified = verify_backup(archive)
+    assert {k: report[k] for k in verified} == verified
+    assert set(report) - set(verified) == {"directory_fsync", "file_fsync", "power_loss_verified"}
     target = tmp_path / "restored"
     assert restore_offline(archive, target, confirmed_quiescent=True)["stored_objects"] == 2
     with ObjectStore(str(target)) as s:

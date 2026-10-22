@@ -47,9 +47,7 @@ class V03Store:
         sha = hashlib.sha256(data).hexdigest()
         self.conn.execute("BEGIN IMMEDIATE")
         try:
-            self.conn.execute(
-                "INSERT INTO uploads VALUES (?, 'pending_storage', ?, ?)", (uid, sha, time.time())
-            )
+            self.conn.execute("INSERT INTO uploads VALUES (?, 'pending_storage', ?, ?)", (uid, sha, time.time()))
             _faults.point("v03.pending_inserted")
             os.rename(spath, os.path.join(self.quarantine_dir, uid))  # no dir fsync described
             _faults.point("v03.renamed")

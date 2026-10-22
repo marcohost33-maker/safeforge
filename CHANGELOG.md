@@ -6,6 +6,18 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### R27 (2026-10-23): a logical ACK is not a power-cut-durable ACK
+
+- **Fixed SF-R27-01 (P1 release scope, cross-family review R27)**: `IngestResult`
+  carried only the objects/ directory status; `ingest()` dropped the object file's
+  fsync status and the staging/ directory status, so a macOS
+  `"degraded:darwin-F_FULLFSYNC-refused-fsync-only"` file sync was invisible.
+  New fields `file_sync`, `staging_sync` and `powercut_durable`: True only if all
+  three syncs are `"ok"` and SQLite runs `synchronous` FULL or EXTRA. The ACK itself
+  is unchanged, so Windows keeps working and never claims power-cut durability; a
+  deduplicated result attests nothing about the earlier ingest.
+  Tests: `tests/test_r27_powercut_ack.py` (6).
+
 ### R25 (2026-10-23): a failed layout fsync blocks every ACK
 
 - **Fixed SF-R25-01 (P1, cross-family review R25)**: R14 only *recorded* a

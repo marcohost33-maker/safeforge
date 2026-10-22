@@ -126,6 +126,13 @@ class IngestResult:
     deduplicated: bool
     publish: str = ""
     dir_sync: str = ""
+    # SF-R27-01: the ACK above is logical (the database says stored). Whether it also survives a power
+    # cut is a separate claim: True only if the object file, objects/ and staging/ all synced "ok" and
+    # SQLite runs synchronous FULL or EXTRA. Windows ("unsupported:") and macOS without F_FULLFSYNC
+    # ("degraded:") stay False; a deduplicated result attests nothing about the earlier ingest.
+    file_sync: str = ""
+    staging_sync: str = ""
+    powercut_durable: bool = False
 
 
 @dataclass
@@ -370,6 +377,7 @@ class ObjectStore:
             self._conn = db.connect(
                 self.db_path, synchronous=synchronous, busy_timeout_ms=busy_timeout_ms, coordinated=coordinated
             )
+            self._commit_survives_power_cut = synchronous.upper() in ("FULL", "EXTRA")
             with db.transaction(self._conn):
                 for stmt in filter(None, (s.strip() for s in _SCHEMA.split(";"))):
                     self._conn.execute(stmt)
@@ -533,7 +541,7 @@ class ObjectStore:
                     f.write(chunk)
                     _faults.point("staging.chunk")
                 _faults.point("staging.written")
-                durable.fsync_file(f)
+                fsync_status = durable.fsync_file(f)
             _faults.point("staging.fsynced")
             digest = h.hexdigest()
             if expected_sha256 is not None and digest != expected_sha256:
@@ -567,7 +575,7 @@ class ObjectStore:
             mech = durable.publish(spath, opath)
             _faults.point("object.published")
             dsync = durable.fsync_dir(self.objects_dir)
-            durable.fsync_dir(self.staging_dir)
+            ssync = durable.fsync_dir(self.staging_dir)
             _faults.point("dirs.fsynced")
             # (5) conditional status commit
             with db.transaction(self._conn):
@@ -583,7 +591,8 @@ class ObjectStore:
         except BaseException:
             self._abort(oid)
             raise
-        return IngestResult(oid, digest, size, False, mech, dsync)
+        durable_ack = self._commit_survives_power_cut and fsync_status == dsync == ssync == "ok"
+        return IngestResult(oid, digest, size, False, mech, dsync, fsync_status, ssync, durable_ack)
 
     def _dedup(self, hit: tuple[str, str, str, int], digest: str | None) -> IngestResult:
         oid, status, sha, size = hit

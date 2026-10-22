@@ -43,7 +43,10 @@ POSIX rename) run only in CI. Nothing here has been audited externally.
   `publish()` uses `MoveFileExW(MOVEFILE_WRITE_THROUGH)`, which Microsoft
   documents as "does not return until the file is actually moved on the
   disk". Microsoft documents no atomicity guarantee for it. The result reports
-  `dir_sync = "unsupported:…"` instead of hiding this.
+  `dir_sync = "unsupported:…"` instead of hiding this, and
+  `IngestResult.powercut_durable` is True only where every sync of the ingest
+  (file, objects/, staging/) returned `"ok"` under `synchronous` FULL/EXTRA --
+  never on Windows. An ACK is a logical ACK; read that field for the power-cut claim.
 - **macOS needs F_FULLFSYNC.** Apple's fsync(2) flushes to the drive, not
   through its cache, and CPython's `os.fsync` does not issue `F_FULLFSYNC`.
   `durable` issues it (falling back to fsync with status

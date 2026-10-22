@@ -57,6 +57,7 @@ __all__ = [
     "IngestInFlight",
     "IngestAborted",
     "IdempotencyConflict",
+    "LayoutNotDurable",
 ]
 
 _ID_RE = re.compile(r"^[0-9a-f]{32}$")
@@ -102,6 +103,19 @@ class IngestAborted(IngestError):
 
 class IdempotencyConflict(IngestError):
     """The idempotency key was already used for different content."""
+
+
+class LayoutNotDurable(IngestError):
+    """A store directory's entry could not be fsync'ed in its parent; the store does not open.
+
+    SF-R25-01: an opened store can acknowledge ingests, so it must not exist
+    while root/, objects/ or staging/ may vanish in a power cut. ``layout_sync``
+    keeps every parent's status, the failed ones as ``"failed:<error>"``.
+    """
+
+    def __init__(self, message: str, layout_sync: dict[str, str]) -> None:
+        super().__init__(message)
+        self.layout_sync = dict(layout_sync)
 
 
 @dataclass(frozen=True)
@@ -213,15 +227,17 @@ def _missing_dirs(path: str) -> list[str]:
     return out
 
 
-def _sync_parents(created: list[str]) -> dict[str, str]:
-    """fsync the parent of every directory we created; report, never hide, a failure.
+def _sync_parents(dirs: list[str]) -> dict[str, str]:
+    """fsync the parent of every directory in ``dirs``; report, never hide, a failure.
 
     Returns ``{parent: status}`` with the statuses of :func:`durable.fsync_dir`
-    plus ``"failed:<error>"`` when the parent cannot be opened (e.g. a parent
-    with execute but no read permission).
+    plus ``"failed:<error>"`` when it raises (e.g. a parent with execute but
+    no read permission, or EIO). Every parent is attempted, so the report is
+    complete; the caller decides -- :class:`ObjectStore` refuses to open on any
+    ``"failed:"`` (SF-R25-01).
     """
     out: dict[str, str] = {}
-    for parent in sorted({os.path.dirname(d) for d in created}, key=len, reverse=True):
+    for parent in sorted({os.path.dirname(d) for d in dirs}, key=len, reverse=True):
         try:
             out[parent] = durable.fsync_dir(parent)
         except OSError as e:
@@ -256,8 +272,9 @@ class ObjectStore:
     survive a power cut: under NORMAL the WAL is not synced at commit, and the
     LazyFS test shows an acknowledged upload lost entirely
     (tests/test_powerloss_lazyfs.py). NORMAL survives process crashes only.
-    ``layout_sync`` reports the fsyncs of the parents of directories this
-    instance created (SF-R14-01).
+    ``layout_sync`` reports the fsyncs of the parents of root/, objects/,
+    staging/ and of every directory this instance created (SF-R14-01); a
+    failed one raises :class:`LayoutNotDurable` instead (SF-R25-01).
     """
 
     def __init__(
@@ -320,7 +337,21 @@ class ObjectStore:
             # this a power cut can drop objects/ (or root itself) together with
             # every object acknowledged inside it; publish() only syncs
             # objects/ and staging/, never their parents.
-            self.layout_sync = _sync_parents(created)
+            # SF-R25-01: a failure must stop the store, not just be recorded --
+            # an open store acknowledges ingests and idempotency replays. And
+            # the parents are re-synced on EVERY open, not only when this call
+            # created something: after a failed or crashed earlier open the
+            # layout exists (created == []) but was never proven durable. The
+            # extra fsyncs are idempotent and cheap. Platform statuses
+            # ("unsupported:" on Windows, "degraded:" on macOS) pass, as in
+            # ingest(), where only a raising fsync_dir prevents the ACK.
+            self.layout_sync = _sync_parents(created + [root, self.objects_dir, self.staging_dir])
+            failed = sorted(p for p, s in self.layout_sync.items() if s.startswith("failed:"))
+            if failed:
+                raise LayoutNotDurable(
+                    "store layout not durable: directory fsync failed for %s" % ", ".join(failed),
+                    self.layout_sync,
+                )
             # Publication must stay on one filesystem. Refuse a staging area on
             # another volume (e.g. /tmp on tmpfs) up front instead of failing with
             # EXDEV per upload -- or worse, silently degrading to copy+delete.

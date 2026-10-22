@@ -88,7 +88,9 @@ def test_positive_control_healthy_layout_sync_acks(tmp_path, fake):
     assert str(tmp_path) in fake.calls  # root's own entry was synced
 
 
-@pytest.mark.parametrize("status", ["unsupported:windows-has-no-directory-fsync", "degraded:darwin-F_FULLFSYNC-refused-fsync-only"])
+@pytest.mark.parametrize(
+    "status", ["unsupported:windows-has-no-directory-fsync", "degraded:darwin-F_FULLFSYNC-refused-fsync-only"]
+)
 def test_platform_status_is_reported_and_does_not_block(tmp_path, fake, status):
     # Same treatment as publish(): IngestResult.dir_sync carries the status, the ACK happens.
     fake.status = status

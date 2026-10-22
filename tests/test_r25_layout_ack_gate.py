@@ -79,13 +79,25 @@ def _assert_refused_as_layout_not_durable(outcome, parent: str) -> None:
     assert outcome.layout_sync[parent].startswith("failed:"), outcome.layout_sync
 
 
+def _open_ingest_with_layout(root: str, payload: bytes) -> tuple[IngestResult | IngestError, dict | None]:
+    """Like :func:`_open_and_ingest`, plus the layout report of the open (or of the refusal)."""
+    try:
+        with ObjectStore(root) as s:
+            return s.ingest(io.BytesIO(payload), max_bytes=1024), dict(s.layout_sync)
+    except IngestError as e:
+        return e, getattr(e, "layout_sync", None)
+
+
 def test_positive_control_healthy_layout_sync_acks(tmp_path, fake):
-    with ObjectStore(str(tmp_path / "store")) as s:
-        assert s.layout_sync and all(v == "ok" for v in s.layout_sync.values())
-        outcome = s.ingest(io.BytesIO(b"positive control"), max_bytes=1024)
-        assert s.status_of(outcome.object_id) == "stored"
+    # A refusal is returned, not raised, so a gate that blocks the healthy
+    # path fails HERE as an assertion (the diskriminierung tool's evidence).
+    outcome, layout = _open_ingest_with_layout(str(tmp_path / "store"), b"positive control")
+    assert isinstance(outcome, IngestResult), "healthy layout fsync was refused: %r" % (outcome,)
+    assert layout and all(v == "ok" for v in layout.values()), layout
     assert fake.calls, "fsync_dir fake was never called -- the patch did not take effect"
     assert str(tmp_path) in fake.calls  # root's own entry was synced
+    with ObjectStore(str(tmp_path / "store")) as s:
+        assert s.status_of(outcome.object_id) == "stored"
 
 
 @pytest.mark.parametrize(
@@ -94,9 +106,9 @@ def test_positive_control_healthy_layout_sync_acks(tmp_path, fake):
 def test_platform_status_is_reported_and_does_not_block(tmp_path, fake, status):
     # Same treatment as publish(): IngestResult.dir_sync carries the status, the ACK happens.
     fake.status = status
-    with ObjectStore(str(tmp_path / "store")) as s:
-        assert s.layout_sync and all(v == status for v in s.layout_sync.values())
-        outcome = s.ingest(io.BytesIO(b"payload"), max_bytes=1024)
+    outcome, layout = _open_ingest_with_layout(str(tmp_path / "store"), b"payload")
+    assert isinstance(outcome, IngestResult), "platform status %r was treated as a failure: %r" % (status, outcome)
+    assert layout and all(v == status for v in layout.values()), layout
     assert outcome.dir_sync == status
     assert fake.calls
 

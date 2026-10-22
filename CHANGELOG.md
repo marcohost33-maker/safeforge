@@ -6,6 +6,38 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### R14 (2026-10-22): power-cut tests, layout durability
+
+Closes the open item "power cut untested" from the R13 handoff as far as
+software simulation reaches; it is still not a proof (see README).
+
+- **Added** `tests/test_powerloss_lazyfs.py`: crash at each of 9 failpoints,
+  then LazyFS `clear-cache` (all unsynced bytes, SQLite WAL included, are
+  dropped), then reconcile. Shipped writer: invariants hold everywhere, the
+  acknowledged object is intact. Negative controls: without the staging fsync
+  the acknowledged object comes back corrupt (`missing_or_corrupt`); with
+  `synchronous=NORMAL` the acknowledged upload is lost. A canary file proves
+  each cut dropped data. LazyFS pinned to commit `fa7d32e`
+  (`experiments/lazyfs/build_lazyfs.sh`, spdlog/toml11 pinned too); new CI
+  job `powerloss` with `SAFEFORGE_LAZYFS_REQUIRED=1` so a broken setup fails.
+- **Added** `tests/test_powerloss_dirmodel.py`: LazyFS persists directory
+  operations immediately (measured), so lost directory entries are covered by
+  a model: every entry created or removed since the directory's last real
+  fsync may independently survive or vanish (traced by
+  `tests/powerloss_driver.py`). 17 states over 9 failpoints, all pass; a
+  writer without the directory fsyncs loses the acknowledged object.
+- **Fixed SF-R14-01 (P3)**: `ObjectStore.__init__` created root/, objects/
+  and staging/ without fsyncing their parents, so a power cut soon after the
+  first acknowledged upload could remove the directory holding it. Parents of
+  every directory the store creates are now fsync'ed; the result is reported
+  in `ObjectStore.layout_sync` (`"failed:<error>"` if a parent cannot be
+  opened, e.g. execute-only) instead of being hidden. Red at 6e35d71, green
+  after (`tests/test_r14_layout_durability.py`).
+- LazyFS quirk documented in `tests/lazyfs_harness.py`: a `--config-path`
+  containing "-o" (e.g. `/tmp/pytest-of-root/...`) is silently replaced by
+  `config/default.toml`; its completion FIFO is opened once and must stay
+  open on the reader side.
+
 Integration of the cumulative R2–R9 hardening from an external cross-family
 review. **Status: best-effort cooperative hardening of a reference
 implementation. Production: NO GO.** The coordination lock is an advisory

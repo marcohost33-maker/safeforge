@@ -218,7 +218,7 @@ def test_symlinked_db_path_is_not_durable(tmp_path, fake):
     real_dir.mkdir()
     link_dir.mkdir()
     target = real_dir / "meta.db"
-    sqlite3.connect(str(target)).close()
+    target.write_bytes(b"")  # an empty file is an empty SQLite database
     link = link_dir / "meta.db"
     os.symlink(str(target), str(link))
     with ObjectStore(str(tmp_path / "store"), db_path=str(link)) as s:

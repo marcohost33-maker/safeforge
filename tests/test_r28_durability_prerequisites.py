@@ -306,8 +306,11 @@ def test_failed_policy_read_keeps_the_logical_ack(tmp_path, fake):
         s._conn = proxy
         try:
             r = s.ingest(io.BytesIO(b"payload"), max_bytes=100)
+        except Exception as e:  # noqa: BLE001 -- the assertion below names it
+            r = e
         finally:
             s._conn = real
+        assert isinstance(r, IngestResult), "missing evidence failed the ingest: %r" % (r,)
         assert s.status_of(r.object_id) == "stored"
         assert s.verify() == []
     _assert_three_syncs_ok(r)

@@ -172,6 +172,45 @@ def test_db_parent_is_synced_after_the_database_exists(tmp_path, fake):
     assert seen and seen[-1] is True, seen
 
 
+def _root_statuses(monkeypatch, root: str, statuses: list[str]) -> list[str]:
+    """fsync_dir: "ok", except that the n-th sync of ``root`` returns statuses[n] ("raise" raises)."""
+    seen: list[str] = []
+
+    def fsync_dir(path):
+        path = os.path.abspath(path)
+        if path != root:
+            return "ok"
+        status = statuses[min(len(seen), len(statuses) - 1)]
+        seen.append(status)
+        if status == "raise":
+            raise OSError(errno.EIO, "injected fsync failure", path)
+        return status
+
+    monkeypatch.setattr(durable, "fsync_dir", fsync_dir)
+    monkeypatch.setattr(durable, "fsync_file", lambda fh: (fh.flush(), "ok")[1])
+    return seen
+
+
+def test_db_dir_sync_keeps_an_earlier_worse_status(tmp_path, monkeypatch):
+    # Default layout: the database lives in root/, which is first synced as the
+    # parent of objects/ and staging/ and then again after the database exists.
+    root = str(tmp_path / "store")
+    seen = _root_statuses(monkeypatch, root, [DEGRADED, "ok"])
+    with ObjectStore(root) as s:
+        layout = dict(s.layout_sync)
+    assert seen[:2] == [DEGRADED, "ok"], seen
+    assert layout[root] == DEGRADED
+
+
+def test_db_dir_sync_failure_is_reported_over_an_earlier_status(tmp_path, monkeypatch):
+    root = str(tmp_path / "store")
+    seen = _root_statuses(monkeypatch, root, [DEGRADED, "raise"])
+    with pytest.raises(LayoutNotDurable) as exc:
+        ObjectStore(root)
+    assert seen == [DEGRADED, "raise"], seen
+    assert exc.value.layout_sync[root].startswith("failed:"), exc.value.layout_sync
+
+
 @pytest.mark.skipif(not hasattr(os, "symlink") or sys.platform == "win32", reason="POSIX symlink")
 def test_symlinked_db_path_is_not_durable(tmp_path, fake):
     real_dir = tmp_path / "real"
@@ -298,6 +337,16 @@ def test_status_committed_by_another_connection_is_not_attested(tmp_path, fake):
     assert rolled == [1]
     _assert_three_syncs_ok(r)
     assert r.powercut_durable is False
+
+
+def test_backup_summary_of_no_status_is_not_ok():
+    # Same class in the backup/restore reports: an empty status list read as "ok".
+    from safeforge.offline_backup import _durability, _summary
+
+    assert _summary([]) == "missing:no-sync-status"
+    assert _summary(["ok"]) == "ok"  # positive control
+    report = _durability([], [])
+    assert report["directory_fsync"] != "ok" and report["file_fsync"] != "ok"
 
 
 # -- E: a deduplicated answer attests nothing ----------------------------------------

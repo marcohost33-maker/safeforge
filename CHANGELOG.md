@@ -6,6 +6,37 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### R28 (2026-10-26): powercut_durable needs every prerequisite
+
+- **Fixed SF-R28-01 (P2, cross-family reviews R28..R31, pinned to 34dfc50)**:
+  `powercut_durable` was computed from the three per-ingest syncs and the
+  `synchronous` value *requested* at open. It ignored `layout_sync` (a
+  `"degraded:"`/`"unsupported:"` parent of root/ still gave True), never synced
+  the directory of an external `db_path`, synced the store root before SQLite
+  created the database and -wal names in it, and trusted a policy the caller
+  could change on the connection, also only for the moment of the status
+  COMMIT (SF-R31-01). Now:
+  - Every open fsyncs the directory holding the database after the schema
+    transaction and reports it in `layout_sync` (both directories of a
+    symlinked `db_path`, the alias itself as `"degraded:"`); a raising fsync
+    refuses the store with `LayoutNotDurable`, as in SF-R25-01.
+  - `powercut_durable` = file, objects/ and staging/ syncs `"ok"` AND a
+    non-empty `layout_sync` with every entry `"ok"` AND `synchronous`
+    FULL/EXTRA, `journal_mode` WAL (macOS: `fullfsync`) read as the last
+    statements inside the status-commit transaction (SQLite refuses to change
+    `synchronous` there) AND this ingest's own UPDATE committed 'stored' (not
+    a reconciler on another connection).
+  - Missing evidence (e.g. a failing PRAGMA read) gives False; it never turns
+    a committed ingest into a reported failure. No WAL checkpoint per ACK.
+  - Same class, latent: the backup/restore report summarised an empty status
+    list as `"ok"`; it is now `"missing:no-sync-status"` (no current caller
+    passes an empty list).
+  - The name stays `powercut_durable`; it reports software prerequisites, not
+    a measured power-cut guarantee (README).
+  - README: the upstream SQLite WAL-reset bug (fixed in 3.51.3, backports
+    3.44.6 / 3.50.7) is a deployment requirement this library does not check.
+  Tests: `tests/test_r28_durability_prerequisites.py`.
+
 ### R27 (2026-10-23): a logical ACK is not a power-cut-durable ACK
 
 - **Fixed SF-R27-01 (P1 release scope, cross-family review R27)**: `IngestResult`

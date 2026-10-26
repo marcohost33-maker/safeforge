@@ -29,6 +29,10 @@ class BackupRejected(RuntimeError):
 
 def _summary(statuses: list[str]) -> str:
     # Inputs may already be summaries ("a;b") from a nested report.
+    # SF-R28-01 variant: no status at all is missing evidence, not "ok". All
+    # current callers pass at least one status; this keeps it that way.
+    if not statuses:
+        return "missing:no-sync-status"
     failed = sorted({part for s in statuses for part in s.split(";") if part != "ok"})
     return "ok" if not failed else ";".join(failed)
 

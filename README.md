@@ -44,9 +44,21 @@ POSIX rename) run only in CI. Nothing here has been audited externally.
   documents as "does not return until the file is actually moved on the
   disk". Microsoft documents no atomicity guarantee for it. The result reports
   `dir_sync = "unsupported:…"` instead of hiding this, and
-  `IngestResult.powercut_durable` is True only where every sync of the ingest
-  (file, objects/, staging/) returned `"ok"` under `synchronous` FULL/EXTRA --
-  never on Windows. An ACK is a logical ACK; read that field for the power-cut claim.
+  `IngestResult.powercut_durable` is True only where every observed
+  prerequisite was `"ok"`: the syncs of the ingest (file, objects/, staging/),
+  every entry of `ObjectStore.layout_sync` (including the directory that
+  holds the database, synced after the database exists), and the SQLite
+  policy read inside the status-commit transaction (`synchronous` FULL/EXTRA,
+  `journal_mode` WAL, on macOS `fullfsync`) -- never on Windows. An ACK is a
+  logical ACK; read that field for the power-cut claim. It reports software
+  prerequisites, not a measured power-cut guarantee.
+- **SQLite WAL-reset bug (upstream).** sqlite.org documents a rare WAL-reset
+  race that can corrupt a WAL database when two or more connections write or
+  checkpoint at the same instant; it is fixed in SQLite 3.51.3 and in the
+  backports 3.44.6 and 3.50.7. One `ObjectStore` per thread on the same
+  database meets the precondition. This library does not check the SQLite
+  version it is linked against; deployments must (`sqlite3.sqlite_version`,
+  vendor backports need their own evidence).
 - **macOS needs F_FULLFSYNC.** Apple's fsync(2) flushes to the drive, not
   through its cache, and CPython's `os.fsync` does not issue `F_FULLFSYNC`.
   `durable` issues it (falling back to fsync with status

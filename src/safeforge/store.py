@@ -40,6 +40,7 @@ import os
 import re
 import sqlite3
 import stat
+import sys
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -127,9 +128,15 @@ class IngestResult:
     publish: str = ""
     dir_sync: str = ""
     # SF-R27-01: the ACK above is logical (the database says stored). Whether it also survives a power
-    # cut is a separate claim: True only if the object file, objects/ and staging/ all synced "ok" and
-    # SQLite runs synchronous FULL or EXTRA. Windows ("unsupported:") and macOS without F_FULLFSYNC
-    # ("degraded:") stay False; a deduplicated result attests nothing about the earlier ingest.
+    # cut is a separate claim. SF-R28-01: True only if EVERY software prerequisite was observed --
+    # the object file, objects/ and staging/ synced "ok"; the store's layout report (``layout_sync``,
+    # including the directory that holds the database) is non-empty and all "ok"; and the status
+    # COMMIT of THIS ingest ran under synchronous FULL/EXTRA in WAL mode (on macOS with fullfsync),
+    # read inside that transaction, not remembered from open. Anything not observed gives False;
+    # the logical ACK is never withdrawn for missing evidence. Windows ("unsupported:") and macOS
+    # without F_FULLFSYNC ("degraded:") stay False; a deduplicated result attests nothing about the
+    # earlier ingest. It reports prerequisites, not a hardware guarantee: drives or bridges that
+    # ignore flushes cannot be detected from software.
     file_sync: str = ""
     staging_sync: str = ""
     powercut_durable: bool = False
@@ -280,8 +287,10 @@ class ObjectStore:
     LazyFS test shows an acknowledged upload lost entirely
     (tests/test_powerloss_lazyfs.py). NORMAL survives process crashes only.
     ``layout_sync`` reports the fsyncs of the parents of root/, objects/,
-    staging/ and of every directory this instance created (SF-R14-01); a
-    failed one raises :class:`LayoutNotDurable` instead (SF-R25-01).
+    staging/ and of every directory this instance created (SF-R14-01), plus
+    the directory holding the database, synced after the database exists
+    (SF-R28-01); a failed one raises :class:`LayoutNotDurable` instead
+    (SF-R25-01). Every entry must be ``"ok"`` for ``powercut_durable``.
     """
 
     def __init__(
@@ -381,6 +390,7 @@ class ObjectStore:
             with db.transaction(self._conn):
                 for stmt in filter(None, (s.strip() for s in _SCHEMA.split(";"))):
                     self._conn.execute(stmt)
+            self._sync_db_dirs()
 
         except BaseException:
             if hasattr(self, "_conn"):
@@ -391,6 +401,54 @@ class ObjectStore:
             raise
 
     # -- plumbing -----------------------------------------------------------
+    def _sync_db_dirs(self) -> None:
+        """SF-R28-01: fsync the directory holding the database, AFTER the database exists.
+
+        The layout fsyncs above run before SQLite creates the database file and
+        its -wal file, and an external ``db_path`` lies outside that layout
+        altogether (R28 case B, R29). So the database's directory is synced here
+        on every open, once the schema transaction has created both names, and
+        reported in ``layout_sync``. A symlinked ``db_path`` has two directories
+        (the link's and the target's); both are synced, and the alias itself is
+        reported ``"degraded:"`` because longer link chains are not followed.
+        A raising fsync refuses the store as in SF-R25-01 and is always
+        reported; otherwise an earlier non-"ok" status for the same directory
+        is kept.
+        """
+        db_abs = os.path.abspath(self.db_path)
+        alias = os.path.islink(db_abs)
+        report = _sync_parents([db_abs, os.path.realpath(db_abs)] if alias else [db_abs])
+        for directory, status in report.items():
+            if self.layout_sync.get(directory, "ok") == "ok" or status.startswith("failed:"):
+                self.layout_sync[directory] = status
+        if alias:
+            self.layout_sync[db_abs] = "degraded:db_path-is-a-symlink"
+        failed = sorted(p for p, s in report.items() if s.startswith("failed:"))
+        if failed:
+            raise LayoutNotDurable(
+                "database directory not durable: directory fsync failed for %s" % ", ".join(failed),
+                self.layout_sync,
+            )
+
+    def _commit_policy_is_durable(self) -> bool:
+        """SF-R28-01 / SF-R31-01: the SQLite policy THIS transaction will commit under.
+
+        Must run inside the status-commit transaction, as its last statements:
+        SQLite refuses to change ``synchronous`` inside a transaction ("Safety
+        level may not be changed inside a transaction") and silently keeps the
+        journal mode, so what is read here is what the COMMIT uses. A value
+        remembered from ``__init__`` is not evidence: the caller can change a
+        PRAGMA on the connection between ingests. A failed read is missing
+        evidence (False), never a failed ingest.
+        """
+        try:
+            sync = self._conn.execute("PRAGMA synchronous").fetchone()[0]
+            journal = self._conn.execute("PRAGMA journal_mode").fetchone()[0]
+            fullfsync = self._conn.execute("PRAGMA fullfsync").fetchone()[0] if sys.platform == "darwin" else 1
+        except (sqlite3.Error, TypeError):
+            return False
+        return sync in (2, 3) and str(journal).lower() == "wal" and fullfsync == 1
+
     def close(self) -> None:
         try:
             self._conn.close()
@@ -583,15 +641,30 @@ class ObjectStore:
                     "UPDATE objects SET status='stored', updated_at=? WHERE id=? AND status='pending'",
                     (time.time(), oid),
                 )
-                if cur.rowcount != 1:
+                # Only this UPDATE's own COMMIT can be attested. If the reconciler
+                # (another connection, with a policy never seen here) rolled the
+                # row forward first, the ACK stays, the durability claim does not.
+                committed_here = cur.rowcount == 1
+                if not committed_here:
                     final = self._status(oid)
                     if final != "stored":
                         raise IngestAborted("ingest %s was marked %r by the reconciler" % (oid, final))
+                policy_at_commit = self._commit_policy_is_durable()
             _faults.point("status.committed")
         except BaseException:
             self._abort(oid)
             raise
-        durable_ack = self._commit_survives_power_cut and fsync_status == dsync == ssync == "ok"
+        # SF-R28-01: D_pre = F and O and S and L and W (see IngestResult). Pure
+        # computation after the COMMIT: nothing here can turn a committed ingest
+        # into a reported failure.
+        layout_ok = bool(self.layout_sync) and all(s == "ok" for s in self.layout_sync.values())
+        durable_ack = (
+            committed_here
+            and policy_at_commit
+            and self._commit_survives_power_cut
+            and layout_ok
+            and fsync_status == dsync == ssync == "ok"
+        )
         return IngestResult(oid, digest, size, False, mech, dsync, fsync_status, ssync, durable_ack)
 
     def _dedup(self, hit: tuple[str, str, str, int], digest: str | None) -> IngestResult:

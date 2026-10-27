@@ -55,10 +55,23 @@ POSIX rename) run only in CI. Nothing here has been audited externally.
 - **SQLite WAL-reset bug (upstream).** sqlite.org documents a rare WAL-reset
   race that can corrupt a WAL database when two or more connections write or
   checkpoint at the same instant; it is fixed in SQLite 3.51.3 and in the
-  backports 3.44.6 and 3.50.7. One `ObjectStore` per thread on the same
-  database meets the precondition. This library does not check the SQLite
-  version it is linked against; deployments must (`sqlite3.sqlite_version`,
-  vendor backports need their own evidence).
+  backports 3.44.6 and 3.50.7 (3.52.0 was withdrawn). One `ObjectStore` per
+  thread on the same database, coordinated stores in several processes and
+  `coordination.event_writer` next to a store all meet the precondition.
+  python.org builds of Python 3.12 (SQLite 3.49.1) and 3.13/3.14 (3.50.4) are
+  affected. The check reads the library actually loaded (`sqlite_version()`
+  and `sqlite_source_id()` from a live connection), not the Python version:
+  - `ObjectStore.sqlite_runtime` reports it for the store's own connection;
+  - `connect(..., require_wal_reset_fix=True)` / `ObjectStore(...,
+    require_wal_reset_fix=True)` refuse an affected library with
+    `WalResetBugUnfixed` (a `ConfigurationError`) before anything is opened or
+    created. The default is `False`: whether an affected library blocks at
+    runtime is an open owner decision;
+  - release gate: `python -m safeforge.sqlite_gate` exits 1 on an affected
+    library. `SAFEFORGE_ALLOW_UNFIXED_SQLITE=<reason>` is the only exception;
+    the verdict (`"waived"`) and the reason are printed. A release run must
+    not set it without a written reason. The decision is by version number: a
+    vendor backport without a version bump is reported as affected.
 - **macOS needs F_FULLFSYNC.** Apple's fsync(2) flushes to the drive, not
   through its cache, and CPython's `os.fsync` does not issue `F_FULLFSYNC`.
   `durable` issues it (falling back to fsync with status

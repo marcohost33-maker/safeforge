@@ -46,7 +46,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import BinaryIO
 
-from . import _faults, db, durable
+from . import _faults, db, durable, sqlite_runtime
 
 __all__ = [
     "ObjectStore",
@@ -291,6 +291,10 @@ class ObjectStore:
     the directory holding the database, synced after the database exists
     (SF-R28-01); a failed one raises :class:`LayoutNotDurable` instead
     (SF-R25-01). Every entry must be ``"ok"`` for ``powercut_durable``.
+    ``sqlite_runtime`` reports the SQLite library behind the connection and
+    whether it carries the WAL-reset fix; ``require_wal_reset_fix=True``
+    refuses an affected library before anything is created (default False,
+    owner decision open).
     """
 
     def __init__(
@@ -303,11 +307,18 @@ class ObjectStore:
         busy_timeout_ms: int = 5000,
         enforce_private: bool = False,
         coordinated: bool = False,
+        require_wal_reset_fix: bool = False,
     ) -> None:
         if type(coordinated) is not bool:
             raise ValueError("coordinated must be bool")
         if type(enforce_private) is not bool:
             raise ValueError("enforce_private must be bool")
+        # Default = Owner-Entscheid E2 offen (Board I1026-07); see db.connect.
+        # Checked here, before any directory is created, and again in db.connect.
+        if type(require_wal_reset_fix) is not bool:
+            raise TypeError("require_wal_reset_fix must be bool")
+        if require_wal_reset_fix:
+            db.check_wal_reset_fix()
         if enforce_private and os.name != "posix":
             raise ValueError("enforce_private requires POSIX permission semantics")
         root = os.path.abspath(root)
@@ -384,8 +395,18 @@ class ObjectStore:
                     os.close(fd)
                 _check_private_path(self.db_path, directory=False)
             self._conn = db.connect(
-                self.db_path, synchronous=synchronous, busy_timeout_ms=busy_timeout_ms, coordinated=coordinated
+                self.db_path,
+                synchronous=synchronous,
+                busy_timeout_ms=busy_timeout_ms,
+                coordinated=coordinated,
+                require_wal_reset_fix=require_wal_reset_fix,
             )
+            # GPT-6 cross-family (SF-XF-WAL): the library THIS connection runs on,
+            # read from it, and whether it carries the WAL-reset fix. Several
+            # ObjectStores on one database are the bug's precondition (see
+            # safeforge.sqlite_runtime). A report, not a gate, unless
+            # require_wal_reset_fix=True.
+            self.sqlite_runtime = sqlite_runtime.loaded_sqlite_status(self._conn)
             self._commit_survives_power_cut = synchronous.upper() in ("FULL", "EXTRA")
             with db.transaction(self._conn):
                 for stmt in filter(None, (s.strip() for s in _SCHEMA.split(";"))):

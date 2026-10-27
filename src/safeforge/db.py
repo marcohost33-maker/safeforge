@@ -30,13 +30,40 @@ import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-__all__ = ["connect", "transaction", "ConfigurationError"]
+__all__ = ["connect", "transaction", "ConfigurationError", "WalResetBugUnfixed"]
 
 _SYNC = {"OFF": 0, "NORMAL": 1, "FULL": 2, "EXTRA": 3}
 
 
 class ConfigurationError(RuntimeError):
     """The database could not be put into the required mode."""
+
+
+class WalResetBugUnfixed(ConfigurationError):
+    """The loaded SQLite library predates the WAL-reset fix (see :mod:`safeforge.sqlite_runtime`).
+
+    Raised only when the caller asked for ``require_wal_reset_fix=True``.
+    ``status`` is the dict from :func:`safeforge.sqlite_runtime.loaded_sqlite_status`.
+    """
+
+    def __init__(self, status: dict) -> None:
+        super().__init__(
+            "SQLite %s (%s) lacks the WAL-reset fix: %s" % (status.get("version"), status.get("source_id"), status.get("reason"))
+        )
+        self.status = status
+
+
+def check_wal_reset_fix() -> dict:
+    """Raise :class:`WalResetBugUnfixed` unless the loaded library is fixed; return its status.
+
+    Uses a separate ``:memory:`` connection, so nothing on disk is touched first.
+    """
+    from . import sqlite_runtime
+
+    status = sqlite_runtime.loaded_sqlite_status()
+    if status.get("fixed") is not True:
+        raise WalResetBugUnfixed(status)
+    return status
 
 
 class _CoordinatedCursor(sqlite3.Cursor):
@@ -104,10 +131,22 @@ def connect(
     synchronous: str = "FULL",
     busy_timeout_ms: int = 5000,
     coordinated: bool = False,
+    require_wal_reset_fix: bool = False,
 ) -> sqlite3.Connection:
-    """Open ``path`` in WAL mode with an explicit-transaction connection."""
+    """Open ``path`` in WAL mode with an explicit-transaction connection.
+
+    ``require_wal_reset_fix=True`` refuses a SQLite library without the
+    WAL-reset fix (:class:`WalResetBugUnfixed`) before the database is opened.
+    """
     if type(coordinated) is not bool:
         raise TypeError("coordinated must be bool")
+    # Default = Owner-Entscheid E2 offen (Board I1026-07): whether an affected
+    # SQLite blocks at RUNTIME is the owner's call. Until then the default does
+    # not block; the release gate (python -m safeforge.sqlite_gate) does.
+    if type(require_wal_reset_fix) is not bool:
+        raise TypeError("require_wal_reset_fix must be bool")
+    if require_wal_reset_fix:
+        check_wal_reset_fix()
     # A new R8 connection must acknowledge the coordinated protocol. This is
     # NOT an enforcement mechanism against old versions or raw sqlite3.connect.
     from .coordination import CoordinationRejected, initialized, require_held_key, root_key

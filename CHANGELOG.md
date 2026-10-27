@@ -6,6 +6,33 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### SF-XF-WAL (2026-10-27): gate on the SQLite library actually loaded
+
+- **Cross-family finding (GPT-6)**: the README named the upstream WAL-reset
+  bug but nothing checked it, and the SQLite bundled with python.org 3.13/3.14
+  (3.50.4) and 3.12 (3.49.1) predates the fix. sqlite.org/wal.html section 11:
+  affected 3.7.0 through 3.51.2 when two or more connections on one WAL file
+  write or checkpoint at the same instant; fixed in 3.51.3, backports 3.44.6
+  and 3.50.7; 3.52.0 withdrawn (sqlite.org/changes.html). SafeForge meets the
+  precondition by design (one `ObjectStore` per thread, coordinated stores
+  across processes, `event_writer` beside a store). Now:
+  - `safeforge.sqlite_runtime.sqlite_wal_reset_status(version_info, source_id)`
+    (pure, exact types) and `loaded_sqlite_status(conn=None)`, which reads
+    `sqlite_version()` / `sqlite_source_id()` from a live connection instead of
+    `sqlite3.sqlite_version_info`.
+  - `ObjectStore.sqlite_runtime` reports the library behind the store's
+    connection.
+  - `connect` / `ObjectStore` take `require_wal_reset_fix` (exact bool).
+    `True` refuses an affected library with `WalResetBugUnfixed` (a
+    `ConfigurationError`, exported) before any file or directory is touched.
+    **Default `False` -- owner decision E2 open**; nothing blocks by default.
+  - Release gate `python -m safeforge.sqlite_gate`: exit 1 on an affected
+    library, 0 on a fixed one; `SAFEFORGE_ALLOW_UNFIXED_SQLITE=<reason>` waives
+    it visibly (verdict `"waived"`, reason printed), a blank reason exits 2.
+    CI runs it on every test runner with a waiver that says PR CI is not a
+    release, so the log shows each runner's real library.
+  Tests: `tests/test_xf_sqlite_wal_reset.py`.
+
 ### R28 (2026-10-26): powercut_durable needs every prerequisite
 
 - **Fixed SF-R28-01 (P2, cross-family reviews R28..R31, pinned to 34dfc50)**:

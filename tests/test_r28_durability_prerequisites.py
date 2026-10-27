@@ -89,7 +89,7 @@ def test_c_all_prerequisites_ok_is_durable(tmp_path, fake):
         layout = dict(s.layout_sync)
     _assert_three_syncs_ok(r)
     assert layout and all(v == "ok" for v in layout.values()), layout
-    assert r.powercut_durable is True
+    assert r.durability_prerequisites_ok is True
 
 
 def test_c_external_db_all_ok_is_durable(tmp_path, fake):
@@ -99,7 +99,7 @@ def test_c_external_db_all_ok_is_durable(tmp_path, fake):
         r = s.ingest(io.BytesIO(b"payload"), max_bytes=100)
         layout = dict(s.layout_sync)
     assert layout.get(str(dbdir)) == "ok", layout
-    assert r.powercut_durable is True
+    assert r.durability_prerequisites_ok is True
 
 
 # -- L: every layout status ----------------------------------------------------------
@@ -113,7 +113,7 @@ def test_a_layout_parent_not_ok_is_not_durable(tmp_path, fake, status):
         r = s.ingest(io.BytesIO(b"payload"), max_bytes=100)
         layout = dict(s.layout_sync)
     _assert_three_syncs_ok(r)
-    assert r.powercut_durable is False, layout
+    assert r.durability_prerequisites_ok is False, layout
     assert parent in fake.calls and layout[parent] == status
 
 
@@ -122,7 +122,7 @@ def test_empty_layout_report_is_not_durable(tmp_path, fake):
         s.layout_sync = {}  # no evidence at all must not read as "all ok"
         r = s.ingest(io.BytesIO(b"payload"), max_bytes=100)
     _assert_three_syncs_ok(r)
-    assert r.powercut_durable is False
+    assert r.durability_prerequisites_ok is False
 
 
 # -- L: the database's directory -----------------------------------------------------
@@ -136,7 +136,7 @@ def test_b_external_db_parent_degraded_is_not_durable(tmp_path, fake):
         r = s.ingest(io.BytesIO(b"payload"), max_bytes=100)
         layout = dict(s.layout_sync)
     _assert_three_syncs_ok(r)
-    assert r.powercut_durable is False, layout
+    assert r.durability_prerequisites_ok is False, layout
     assert str(dbdir) in fake.calls and layout[str(dbdir)] == DEGRADED
 
 
@@ -156,7 +156,7 @@ def test_b_external_db_parent_fsync_failure_refuses_open(tmp_path, fake):
     # The refused open released its connection: a healthy reopen works.
     fake.failing.clear()
     with ObjectStore(root, db_path=str(dbdir / "meta.db")) as s:
-        assert s.ingest(io.BytesIO(b"again"), max_bytes=100).powercut_durable is True
+        assert s.ingest(io.BytesIO(b"again"), max_bytes=100).durability_prerequisites_ok is True
 
 
 def test_db_parent_is_synced_after_the_database_exists(tmp_path, fake):
@@ -224,7 +224,7 @@ def test_symlinked_db_path_is_not_durable(tmp_path, fake):
     with ObjectStore(str(tmp_path / "store"), db_path=str(link)) as s:
         r = s.ingest(io.BytesIO(b"payload"), max_bytes=100)
         layout = dict(s.layout_sync)
-    assert r.powercut_durable is False, layout
+    assert r.durability_prerequisites_ok is False, layout
     assert layout[str(real_dir)] == "ok" and layout[str(link_dir)] == "ok"
     assert layout[str(link)].startswith("degraded:"), layout
 
@@ -236,7 +236,7 @@ def test_d_synchronous_normal_requested_is_not_durable(tmp_path, fake):
     with ObjectStore(str(tmp_path / "store"), synchronous="NORMAL") as s:
         r = s.ingest(io.BytesIO(b"payload"), max_bytes=100)
     _assert_three_syncs_ok(r)
-    assert r.powercut_durable is False
+    assert r.durability_prerequisites_ok is False
 
 
 def test_d_synchronous_lowered_after_open_is_not_durable(tmp_path, fake):
@@ -245,7 +245,7 @@ def test_d_synchronous_lowered_after_open_is_not_durable(tmp_path, fake):
         r = s.ingest(io.BytesIO(b"payload"), max_bytes=100)
         assert s._conn.execute("PRAGMA synchronous").fetchone()[0] == 1
     _assert_three_syncs_ok(r)
-    assert r.powercut_durable is False
+    assert r.durability_prerequisites_ok is False
 
 
 def test_d_normal_only_at_the_status_commit_is_not_durable(tmp_path, fake):
@@ -269,7 +269,7 @@ def test_d_normal_only_at_the_status_commit_is_not_durable(tmp_path, fake):
         assert s.status_of(r.object_id) == "stored"
     assert markers == [("dirs.fsynced", 1), ("status.committed", 2)]
     _assert_three_syncs_ok(r)
-    assert r.powercut_durable is False
+    assert r.durability_prerequisites_ok is False
 
 
 def test_d_journal_mode_left_wal_is_not_durable(tmp_path, fake):
@@ -278,7 +278,7 @@ def test_d_journal_mode_left_wal_is_not_durable(tmp_path, fake):
         r = s.ingest(io.BytesIO(b"payload"), max_bytes=100)
         assert s.status_of(r.object_id) == "stored"
     _assert_three_syncs_ok(r)
-    assert r.powercut_durable is False
+    assert r.durability_prerequisites_ok is False
 
 
 class _PragmaFailingConn:
@@ -314,7 +314,7 @@ def test_failed_policy_read_keeps_the_logical_ack(tmp_path, fake):
         assert s.status_of(r.object_id) == "stored"
         assert s.verify() == []
     _assert_three_syncs_ok(r)
-    assert r.powercut_durable is False
+    assert r.durability_prerequisites_ok is False
     assert proxy.raised >= 1
 
 
@@ -339,7 +339,7 @@ def test_status_committed_by_another_connection_is_not_attested(tmp_path, fake):
         assert s.status_of(r.object_id) == "stored"
     assert rolled == [1]
     _assert_three_syncs_ok(r)
-    assert r.powercut_durable is False
+    assert r.durability_prerequisites_ok is False
 
 
 def test_backup_summary_of_no_status_is_not_ok():
@@ -359,5 +359,5 @@ def test_e_deduplicated_result_attests_nothing(tmp_path, fake):
     with ObjectStore(str(tmp_path / "store")) as s:
         first = s.ingest(io.BytesIO(b"same"), max_bytes=100, idempotency_key="k")
         again = s.ingest(io.BytesIO(b"same"), max_bytes=100, idempotency_key="k")
-    assert first.powercut_durable is True
-    assert again.deduplicated is True and again.powercut_durable is False
+    assert first.durability_prerequisites_ok is True
+    assert again.deduplicated is True and again.durability_prerequisites_ok is False

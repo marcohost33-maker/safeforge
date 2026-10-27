@@ -33,7 +33,10 @@ def _summary(statuses: list[str]) -> str:
     # current callers pass at least one status; this keeps it that way.
     if not statuses:
         return "missing:no-sync-status"
-    failed = sorted({part for s in statuses for part in s.split(";") if part != "ok"})
+    # SF-R35-02: an empty part ("", "ok;", ";ok") is missing evidence too, and it
+    # must not come out as "" -- falsy reads as "nothing to report".
+    parts = {part if part else "missing:empty-status" for s in statuses for part in s.split(";")}
+    failed = sorted(parts - {"ok"})
     return "ok" if not failed else ";".join(failed)
 
 

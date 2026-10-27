@@ -137,9 +137,17 @@ class IngestResult:
     # without F_FULLFSYNC ("degraded:") stay False; a deduplicated result attests nothing about the
     # earlier ingest. It reports prerequisites, not a hardware guarantee: drives or bridges that
     # ignore flushes cannot be detected from software.
+    # SF-R35-01: and the SQLite library behind the store carries the WAL-reset fix
+    # (``ObjectStore.sqlite_runtime["fixed"] is True``); an affected library can lose committed
+    # frames when two connections write or checkpoint at once, whatever was synced.
     file_sync: str = ""
     staging_sync: str = ""
-    powercut_durable: bool = False
+    durability_prerequisites_ok: bool = False
+
+    @property
+    def powercut_durable(self) -> bool:
+        """Deprecated read-only alias of ``durability_prerequisites_ok`` (SF-R35, removed after one minor release)."""
+        return self.durability_prerequisites_ok
 
 
 @dataclass
@@ -290,11 +298,14 @@ class ObjectStore:
     staging/ and of every directory this instance created (SF-R14-01), plus
     the directory holding the database, synced after the database exists
     (SF-R28-01); a failed one raises :class:`LayoutNotDurable` instead
-    (SF-R25-01). Every entry must be ``"ok"`` for ``powercut_durable``.
+    (SF-R25-01). Every entry must be ``"ok"`` for ``durability_prerequisites_ok``.
     ``sqlite_runtime`` reports the SQLite library behind the connection and
-    whether it carries the WAL-reset fix; ``require_wal_reset_fix=True``
-    refuses an affected library before anything is created (default False,
-    owner decision open).
+    whether it carries the WAL-reset fix; an affected library never blocks
+    open or ingest by default, but ``durability_prerequisites_ok`` stays False
+    on it (SF-R35-01). ``require_wal_reset_fix=True`` refuses an affected
+    library before anything is created (decision E2, 2026-10-27: default
+    False, because every python.org build is affected; releases are held by
+    ``python -m safeforge.sqlite_gate``).
     """
 
     def __init__(
@@ -685,6 +696,7 @@ class ObjectStore:
             and self._commit_survives_power_cut
             and layout_ok
             and fsync_status == dsync == ssync == "ok"
+            and self.sqlite_runtime.get("fixed") is True
         )
         return IngestResult(oid, digest, size, False, mech, dsync, fsync_status, ssync, durable_ack)
 

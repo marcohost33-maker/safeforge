@@ -203,6 +203,7 @@ def test_connect_default_does_not_block_affected_library(tmp_path, monkeypatch):
     assert calls == []  # default False: the check is not even consulted
 
 
+@pytest.mark.real_sqlite
 def test_connect_real_runtime(tmp_path):
     fixed = loaded_sqlite_status()["fixed"]
     path = tmp_path / "x.db"
@@ -217,6 +218,7 @@ def test_connect_real_runtime(tmp_path):
 # -- ObjectStore -----------------------------------------------------------------
 
 
+@pytest.mark.real_sqlite
 def test_store_reports_its_own_runtime(tmp_path):
     with ObjectStore(str(tmp_path / "root")) as s:
         st = s.sqlite_runtime

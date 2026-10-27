@@ -34,14 +34,14 @@ def test_all_syncs_ok_and_full_is_powercut_durable(tmp_path, monkeypatch):
     _as_posix_ok(monkeypatch)  # positive control: the flag can be True at all
     r = _ingest(tmp_path)
     assert (r.file_sync, r.dir_sync, r.staging_sync) == ("ok", "ok", "ok")
-    assert r.powercut_durable is True
+    assert r.durability_prerequisites_ok is True
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="real Windows statuses")
 def test_windows_ack_is_logical_only(tmp_path):
     r = _ingest(tmp_path)
     assert r.dir_sync == "unsupported:windows-has-no-directory-fsync"
-    assert r.powercut_durable is False
+    assert r.durability_prerequisites_ok is False
 
 
 def test_degraded_file_sync_is_reported_and_not_durable(tmp_path, monkeypatch):
@@ -49,7 +49,7 @@ def test_degraded_file_sync_is_reported_and_not_durable(tmp_path, monkeypatch):
     monkeypatch.setattr(durable, "fsync_file", lambda f: (f.flush(), DEGRADED)[1])
     r = _ingest(tmp_path)
     assert r.file_sync == DEGRADED
-    assert r.powercut_durable is False
+    assert r.durability_prerequisites_ok is False
 
 
 def test_degraded_staging_sync_alone_is_not_durable(tmp_path, monkeypatch):
@@ -64,14 +64,14 @@ def test_degraded_staging_sync_alone_is_not_durable(tmp_path, monkeypatch):
     r = _ingest(tmp_path)
     assert any(os.path.basename(os.path.normpath(p)) == "staging" for p in calls)
     assert (r.dir_sync, r.staging_sync) == ("ok", DEGRADED)
-    assert r.powercut_durable is False
+    assert r.durability_prerequisites_ok is False
 
 
 def test_synchronous_normal_is_not_durable(tmp_path, monkeypatch):
     _as_posix_ok(monkeypatch)
     r = _ingest(tmp_path, synchronous="NORMAL")
     assert (r.file_sync, r.dir_sync, r.staging_sync) == ("ok", "ok", "ok")
-    assert r.powercut_durable is False
+    assert r.durability_prerequisites_ok is False
 
 
 def test_deduplicated_result_attests_nothing(tmp_path, monkeypatch):
@@ -79,5 +79,5 @@ def test_deduplicated_result_attests_nothing(tmp_path, monkeypatch):
     with ObjectStore(str(tmp_path / "store")) as s:
         first = s.ingest(io.BytesIO(b"same"), max_bytes=100, idempotency_key="k")
         again = s.ingest(io.BytesIO(b"same"), max_bytes=100, idempotency_key="k")
-    assert first.powercut_durable is True
-    assert again.deduplicated is True and again.powercut_durable is False
+    assert first.durability_prerequisites_ok is True
+    assert again.deduplicated is True and again.durability_prerequisites_ok is False

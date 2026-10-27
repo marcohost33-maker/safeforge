@@ -94,19 +94,21 @@ def test_status_reason_names_backport_and_withdrawal():
     ["3.51.3", b"3.51.3", [3, 51, 3], (3, 51, True), (True, 51, 3), (3.0, 51, 3), (3, 51, "3"), None, 3513],
 )
 def test_status_rejects_non_tuple_or_non_int(bad):
-    with pytest.raises(TypeError):
+    # match= pins the guard: without it a list fell through to "unhashable
+    # type" and the test stayed green with the tuple check removed (DK BLIND).
+    with pytest.raises(TypeError, match="version_info must be a tuple of three int"):
         sqlite_wal_reset_status(bad, SID)
 
 
 @pytest.mark.parametrize("bad", [(3, 51), (3, 51, 3, 0), (), (3, -1, 0), (-3, 51, 3)])
 def test_status_rejects_wrong_shape_or_negative(bad):
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="version_info"):
         sqlite_wal_reset_status(bad, SID)
 
 
 @pytest.mark.parametrize("bad", [None, b"abc", 7, True])
 def test_status_rejects_non_str_source_id(bad):
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError, match="source_id must be str"):
         sqlite_wal_reset_status((3, 51, 3), bad)
 
 
@@ -167,7 +169,7 @@ def _force(monkeypatch, fixed: bool):
 @pytest.mark.parametrize("bad", [1, 0, "True", "yes", None])
 def test_connect_flag_exact_bool(tmp_path, bad):
     path = tmp_path / "x.db"
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError, match="require_wal_reset_fix must be bool"):
         connect(str(path), require_wal_reset_fix=bad)
     assert not path.exists()
 
@@ -218,6 +220,8 @@ def test_connect_real_runtime(tmp_path):
 def test_store_reports_its_own_runtime(tmp_path):
     with ObjectStore(str(tmp_path / "root")) as s:
         st = s.sqlite_runtime
+        # Keys first: a missing report must fail as an assertion, not a KeyError (DK run 1).
+        assert set(st) == {"fixed", "version", "source_id", "reason"}, st
         assert st["version"] == sqlite3.sqlite_version
         assert st["source_id"] == _real_source_id()
         assert st["fixed"] is sqlite_wal_reset_status(sqlite3.sqlite_version_info, _real_source_id())["fixed"]
@@ -226,7 +230,7 @@ def test_store_reports_its_own_runtime(tmp_path):
 @pytest.mark.parametrize("bad", [1, "yes", None])
 def test_store_flag_exact_bool_before_side_effects(tmp_path, bad):
     root = tmp_path / "root"
-    with pytest.raises(TypeError):
+    with pytest.raises(TypeError, match="require_wal_reset_fix must be bool"):
         ObjectStore(str(root), require_wal_reset_fix=bad)
     assert not root.exists()
 

@@ -44,12 +44,15 @@ POSIX rename) run only in CI. Nothing here has been audited externally.
   documents as "does not return until the file is actually moved on the
   disk". Microsoft documents no atomicity guarantee for it. The result reports
   `dir_sync = "unsupported:…"` instead of hiding this, and
-  `IngestResult.powercut_durable` is True only where every observed
+  `IngestResult.durability_prerequisites_ok` (formerly `powercut_durable`,
+  still readable as a deprecated alias) is True only where every observed
   prerequisite was `"ok"`: the syncs of the ingest (file, objects/, staging/),
   every entry of `ObjectStore.layout_sync` (including the directory that
-  holds the database, synced after the database exists), and the SQLite
+  holds the database, synced after the database exists), the SQLite
   policy read inside the status-commit transaction (`synchronous` FULL/EXTRA,
-  `journal_mode` WAL, on macOS `fullfsync`) -- never on Windows. An ACK is a
+  `journal_mode` WAL, on macOS `fullfsync`), and a linked SQLite with the
+  WAL-reset fix (`ObjectStore.sqlite_runtime["fixed"] is True`, see below)
+  -- never on Windows. An ACK is a
   logical ACK; read that field for the power-cut claim. It reports software
   prerequisites, not a measured power-cut guarantee.
 - **SQLite WAL-reset bug (upstream).** sqlite.org documents a rare WAL-reset
@@ -65,8 +68,10 @@ POSIX rename) run only in CI. Nothing here has been audited externally.
   - `connect(..., require_wal_reset_fix=True)` / `ObjectStore(...,
     require_wal_reset_fix=True)` refuse an affected library with
     `WalResetBugUnfixed` (a `ConfigurationError`) before anything is opened or
-    created. The default is `False`: whether an affected library blocks at
-    runtime is an open owner decision;
+    created. The default is `False` (decision E2, 2026-10-27): every
+    python.org build is affected, so blocking by default would make the
+    library unusable there. An affected library still never yields
+    `durability_prerequisites_ok = True` (SF-R35-01);
   - release gate: `python -m safeforge.sqlite_gate` exits 1 on an affected
     library. `SAFEFORGE_ALLOW_UNFIXED_SQLITE=<reason>` is the only exception;
     the verdict (`"waived"`) and the reason are printed. A release run must

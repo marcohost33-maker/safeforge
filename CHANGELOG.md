@@ -6,6 +6,29 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### R35 (2026-10-27): the durability flag needs the WAL-reset fix; renamed
+
+- **Fixed SF-R35-01 (P0, cross-family review of 6a39c38)**: the flag checked
+  syncs, layout and the commit policy but not the linked library; SQLite
+  3.45.1 gave True. It now also requires
+  `ObjectStore.sqlite_runtime["fixed"] is True` (exact True: a truthy
+  forgery or a missing key gives False). Open and ingest are unchanged.
+- **Renamed** `IngestResult.powercut_durable` -> `durability_prerequisites_ok`
+  before the first release: it reports six software prerequisites, not a
+  power-cut guarantee. `powercut_durable` stays a read-only property alias
+  for one minor release; the constructor no longer takes the old keyword.
+  This supersedes R28's "the name stays".
+- **Fixed SF-R35-02 (P2)**: the backup summary of an empty status part
+  (`""`, `"ok;"`, `";ok"`) was `""` -- falsy; it is now
+  `"missing:empty-status"`.
+- **Decision E2 (2026-10-27)**: `require_wal_reset_fix` stays `False` by
+  default; releases are held by `python -m safeforge.sqlite_gate` until a
+  build with SQLite >= 3.51.3 (or a backport) is used; PR CI keeps its
+  visible waiver.
+- Tests: `tests/conftest.py` pins the library as fixed for tests without the
+  `real_sqlite` marker, so the True path stays covered on affected runners;
+  `tests/test_r35_wal_library_prerequisite.py`.
+
 ### SF-XF-WAL (2026-10-27): gate on the SQLite library actually loaded
 
 - **Cross-family finding (GPT-6)**: the README named the upstream WAL-reset

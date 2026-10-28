@@ -142,19 +142,27 @@ def _link_layout(tmp_path: Path) -> tuple[Path, Path]:
 
 
 def test_r36_03_database_directory_is_resolved_like_the_kernel(tmp_path, fake):
+    """POSIX resolves the link before "..", so SQLite opens actual/meta.db; Win32
+    collapses ".." lexically first and opens alias/meta.db (measured 2026-10-28 with a
+    junction). Either way the directory that really holds the file must be synced."""
     alias, actual = _link_layout(tmp_path)
     db_path = os.path.join(str(alias), "link", os.pardir, "meta.db")
-    fake.failing.add(os.path.realpath(actual))
+    opened_in = actual if os.name == "posix" else alias
+    fake.failing.add(os.path.realpath(opened_in))
 
     outcome = _open_and_ingest(str(tmp_path / "root"), db_path=db_path)
-    assert os.path.exists(actual / "meta.db"), "precondition: SQLite opened actual/meta.db"
-    assert os.path.realpath(actual) in fake.calls, "the database's real directory was never synced"
+    assert os.path.exists(opened_in / "meta.db"), "precondition: SQLite opened %s/meta.db" % opened_in.name
+    assert os.path.realpath(opened_in) in fake.calls, "the database's real directory was never synced"
     assert isinstance(outcome, store_mod.LayoutNotDurable), outcome
 
 
+@pytest.mark.skipif(os.name != "posix", reason="coordinated mode needs POSIX flock; Win32 resolves '..' lexically")
 def test_r36_03_coordinated_mode_refuses_a_database_outside_root_behind_a_link(tmp_path):
+    from safeforge import coordination
+
     root = tmp_path / "root"
-    root.mkdir()
+    ObjectStore(str(root)).close()
+    coordination.initialize(root, externally_quiescent=True)
     elsewhere = tmp_path / "elsewhere" / "child"
     elsewhere.mkdir(parents=True)
     try:

@@ -30,6 +30,18 @@ from safeforge import ObjectStore, durable
 from safeforge.store import LayoutNotDurable
 
 
+def _chain_above(path) -> set[str]:
+    """SF-R36-01: every open also re-syncs the parents of root's ancestors on the
+    same filesystem (up to the mount point), not only what this open created."""
+    real = os.path.realpath(path)
+    out = set()
+    device = os.stat(real).st_dev
+    while os.path.dirname(real) != real and os.stat(os.path.dirname(real)).st_dev == device:
+        real = os.path.dirname(real)
+        out.add(real)
+    return out
+
+
 @pytest.fixture
 def synced(monkeypatch):
     calls: list[str] = []
@@ -47,7 +59,7 @@ def test_fresh_store_syncs_parents_of_created_directories(tmp_path, synced):
     root = tmp_path / "a" / "store"
     os.makedirs(root.parent)
     with ObjectStore(str(root)) as s:
-        assert set(s.layout_sync) == {str(root.parent), str(root)}
+        assert set(s.layout_sync) == {str(root.parent), str(root)} | _chain_above(root)
         if sys.platform == "win32":
             assert all(v.startswith("unsupported:") for v in s.layout_sync.values())
         else:
@@ -72,8 +84,8 @@ def test_existing_layout_is_resynced_on_reopen(tmp_path, synced):
     ObjectStore(str(root)).close()
     synced.clear()
     with ObjectStore(str(root)) as s:
-        assert set(s.layout_sync) == {str(tmp_path), str(root)}
-    assert set(synced) == {str(tmp_path), str(root)}
+        assert set(s.layout_sync) == {str(tmp_path), str(root)} | _chain_above(root)
+    assert set(synced) == {str(tmp_path), str(root)} | _chain_above(root)
 
 
 def test_unopenable_parent_refuses_open_and_reports(tmp_path, monkeypatch):

@@ -6,6 +6,24 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### R36 (2026-10-28): three unearned durability reports (Codex on 4f7404d)
+
+- **Fixed SF-R36-01 (P2)**: a retry after a failed open never re-synced an
+  ancestor that the failed open had created (`/existing/new/store` with
+  `/existing` unsynced: on retry nothing is "created"). Every open now
+  re-syncs the parents of root's whole same-filesystem ancestor chain, up to
+  the mount point.
+- **Fixed SF-R36-02 (P2)**: `_file_copy_verified` returned the fsync status
+  before re-checking the source, so a backup source changed after its bytes
+  were read was restored as `offline_restore_copy_pass`. The check runs again
+  before the return (regression from R35).
+- **Fixed SF-R36-03 (P2)**: the database directory was chosen with
+  `os.path.abspath`, which collapses `link/..` lexically; SQLite follows the
+  link first. The directory is now resolved as the platform's `open()` resolves
+  it (POSIX: symlinks before `..`; Windows: lexical, measured). The same
+  resolution now guards the coordinated-mode and `enforce_private` database
+  location checks.
+
 ### R35 (2026-10-27): the durability flag needs the WAL-reset fix; renamed
 
 - **Fixed SF-R35-01 (P0, cross-family review of 6a39c38)**: the flag checked

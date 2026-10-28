@@ -249,6 +249,35 @@ def _missing_dirs(path: str) -> list[str]:
     return out
 
 
+def _kernel_entry(path: str) -> str:
+    """The directory entry the kernel opens for ``path``: its directory part
+    resolved like ``open()`` resolves it (symlinks before ``..``), its last
+    component unresolved. ``os.path.abspath`` is lexical and can name another
+    directory when a symlink precedes ``..`` (SF-R36-03)."""
+    head, tail = os.path.split(path)
+    return os.path.join(os.path.realpath(head or os.curdir), tail)
+
+
+def _same_device_ancestors(path: str) -> list[str]:
+    """SF-R36-01: ``path`` and each ancestor whose parent is on the same filesystem.
+
+    An earlier open may have created any of these and crashed or failed before
+    their parents were synced; on retry ``_missing_dirs`` is empty, so only this
+    chain can prove them again. It ends at a mount point: that directory existed
+    before the mount, so its entry was never ours to make durable. Resolved with
+    ``realpath`` because ``makedirs`` created the entries where the links point.
+    """
+    out = []
+    path = os.path.realpath(path)
+    device = os.stat(path).st_dev
+    while True:
+        parent = os.path.dirname(path)
+        if parent == path or os.stat(parent).st_dev != device:
+            return out
+        out.append(path)
+        path = parent
+
+
 def _sync_parents(dirs: list[str]) -> dict[str, str]:
     """fsync the parent of every directory in ``dirs``; report, never hide, a failure.
 
@@ -340,7 +369,9 @@ class ObjectStore:
         if coordinated:
             # The offline backup snapshots ONLY root/safeforge.db and root/staging.
             # Arbitrary auxiliary paths would silently escape its inventory.
-            if db_path is not None and os.path.abspath(db_path) != os.path.join(root, "safeforge.db"):
+            # SF-R36-03: compared as the kernel resolves it; "root/link/../safeforge.db"
+            # is lexically inside root but may be a file the backup never sees.
+            if db_path is not None and _kernel_entry(db_path) != os.path.join(os.path.realpath(root), "safeforge.db"):
                 raise IngestError("coordinated mode requires database inside store root")
             if staging_dir is not None and os.path.abspath(staging_dir) != os.path.join(root, "staging"):
                 raise IngestError("coordinated mode requires canonical staging directory")
@@ -383,7 +414,10 @@ class ObjectStore:
             # extra fsyncs are idempotent and cheap. Platform statuses
             # ("unsupported:" on Windows, "degraded:" on macOS) pass, as in
             # ingest(), where only a raising fsync_dir prevents the ACK.
-            self.layout_sync = _sync_parents(created + [root, self.objects_dir, self.staging_dir])
+            # SF-R36-01: the same holds for ancestors ABOVE root that a failed
+            # earlier open created (/existing/new/store with /existing unsynced):
+            # the whole same-filesystem chain is re-proven, not only `created`.
+            self.layout_sync = _sync_parents(created + _same_device_ancestors(root) + [root, self.objects_dir, self.staging_dir])
             failed = sorted(p for p, s in self.layout_sync.items() if s.startswith("failed:"))
             if failed:
                 raise LayoutNotDurable(
@@ -396,7 +430,7 @@ class ObjectStore:
             durable.require_same_volume(self.staging_dir, self.objects_dir)
             self.db_path = db_path or os.path.join(root, "safeforge.db")
             if enforce_private:
-                if os.path.abspath(os.path.dirname(self.db_path)) != root:
+                if os.path.dirname(_kernel_entry(self.db_path)) != os.path.realpath(root):
                     raise ValueError("enforce_private requires the SQLite database directly under root")
                 for directory in (root, self.objects_dir, self.staging_dir):
                     _check_private_path(directory, directory=True)
@@ -447,7 +481,12 @@ class ObjectStore:
         reported; otherwise an earlier non-"ok" status for the same directory
         is kept.
         """
-        db_abs = os.path.abspath(self.db_path)
+        # SF-R36-03 (Codex on 4f7404d): abspath() collapses "link/.." lexically, but
+        # SQLite's open() follows the link first -- "alias/link/../meta.db" with
+        # link -> actual/child is actual/meta.db. So the directory is resolved the
+        # way the kernel resolves it; only the final component keeps its own name,
+        # because a symlinked database file is reported as an alias below.
+        db_abs = _kernel_entry(self.db_path)
         alias = os.path.islink(db_abs)
         report = _sync_parents([db_abs, os.path.realpath(db_abs)] if alias else [db_abs])
         for directory, status in report.items():

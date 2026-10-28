@@ -100,9 +100,13 @@ def _file_copy_verified(src: Path, dst: Path, expected_sha: str, expected_size: 
             synced = durable.fsync_file(out)
     if size != expected_size or h.hexdigest() != expected_sha:
         raise BackupRejected("object checksum or size mismatch while copying")
-    return synced
+    # SF-R36-02 (Codex on 4f7404d): the source re-check is the race detector for a
+    # source that changes or disappears after its bytes were read (restore_offline
+    # re-reads only the manifest and COMPLETE marker afterwards). Returning the fsync
+    # status before it made the check unreachable.
     if not _file_matches(str(src), expected_sha, expected_size):
         raise BackupRejected("source object changed or disappeared during copying")
+    return synced
 
 
 def _integrity(con: sqlite3.Connection) -> None:

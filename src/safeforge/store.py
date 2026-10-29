@@ -258,7 +258,7 @@ def _kernel_entry(path: str) -> str:
     return os.path.join(os.path.realpath(head or os.curdir), tail)
 
 
-def _same_mount_ancestors(path: str) -> tuple[list[str], str]:
+def _same_mount_ancestors(path: str, mount_probe: mounts.MountProbe | None = None) -> tuple[list[str], str]:
     """SF-R36-01: ``path`` and each ancestor whose parent is on the same mount.
 
     An earlier open may have created any of these and crashed or failed before
@@ -274,10 +274,16 @@ def _same_mount_ancestors(path: str) -> tuple[list[str], str]:
     /proc/self/mountinfo, GetVolumePathNameW). Without such a source the walk
     goes on across a same-st_dev mount (more syncs, never fewer). Returns the
     chain and the name of the proof source (``ObjectStore.layout_mount_basis``).
+
+    SF-R38-01: ``mount_probe`` lets a second chain (an external staging
+    directory) reuse the probe of the first. A probe answers for any path --
+    where its statx proof is missing it falls back or keeps walking -- so one
+    mount table parse serves both chains.
     """
     out = []
     path = os.path.realpath(path)
-    mount_probe = mounts.probe(path)
+    if mount_probe is None:
+        mount_probe = mounts.probe(path)
     while True:
         parent = os.path.dirname(path)
         if parent == path or mount_probe.may_stop(path, parent):
@@ -429,8 +435,17 @@ class ObjectStore:
             # earlier open created (/existing/new/store with /existing unsynced):
             # the whole same-mount chain is re-proven, not only `created`.
             # R15: layout_mount_basis names what proved where the chain stops.
-            ancestors, self.layout_mount_basis = _same_mount_ancestors(root)
-            self.layout_sync = _sync_parents(created + ancestors + [root, self.objects_dir, self.staging_dir])
+            # SF-R38-01 (Codex on ac933f3): staging_dir has its own chain when it
+            # resolves outside root (an explicit path, or a link). A failed open can
+            # leave /external/new/spool/staging with /external unsynced, and an
+            # explicit db_path may live in those ancestors. So the staging chain is
+            # walked on every open as well, with the same probe; inside root it
+            # repeats root's chain (merged by _sync_parents). Cost: one stat walk
+            # and one fsync per extra ancestor level, no second mount-table parse.
+            mount_probe = mounts.probe(os.path.realpath(root))
+            ancestors, self.layout_mount_basis = _same_mount_ancestors(root, mount_probe)
+            staging_chain, _basis = _same_mount_ancestors(self.staging_dir, mount_probe)
+            self.layout_sync = _sync_parents(created + ancestors + staging_chain + [root, self.objects_dir, self.staging_dir])
             failed = sorted(p for p, s in self.layout_sync.items() if s.startswith("failed:"))
             if failed:
                 raise LayoutNotDurable(

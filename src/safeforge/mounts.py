@@ -117,20 +117,125 @@ def parse_mountinfo(text: str) -> dict[str, tuple[int, int]] | None:
     parent_of = {mid: parent for mid, parent, _dev, _point in entries}
     if len(parent_of) != len(entries):
         return None
-
-    def ancestors(mid: int) -> set[int]:
-        out: set[int] = set()
-        while mid in parent_of and parent_of[mid] not in out and parent_of[mid] != mid:
-            mid = parent_of[mid]
-            out.add(mid)
-        return out
-
+    hidden = _covered_entries(entries, parent_of)
     visible: dict[str, tuple[int, int]] = {}
     for mid, _parent, dev, point in entries:
-        above = ancestors(mid)
-        if not any(o != mid and o not in above and _covers(p, point) for o, _pp, _d, p in entries):
+        if mid not in hidden:
             visible[point] = dev
     return visible
+
+
+def _slash_prefixes(inner: str) -> list[str]:
+    """Every ``outer.rstrip("/")`` for which ``inner.startswith(outer.rstrip("/") + "/")``:
+    ``inner[:i]`` where ``inner[i]`` is the first ``/`` of a run."""
+    return [inner[:i] for i, c in enumerate(inner) if c == "/" and (i == 0 or inner[i - 1] != "/")]
+
+
+class _CoverCount:
+    """How many entries of a multiset of mount points cover ``inner`` (:func:`_covers`),
+    in O(len(inner)) instead of a scan: ``_covers(outer, inner)`` holds iff
+    ``outer == inner`` or ``outer.rstrip("/")`` is one of ``_slash_prefixes(inner)``.
+    Both can hold for the same entry only if ``inner`` ends with ``/`` (then the
+    prefix term already counts every ``outer == inner``)."""
+
+    def __init__(self) -> None:
+        self.exact: dict[str, int] = {}
+        self.stripped: dict[str, int] = {}
+
+    def add(self, point: str, k: int = 1) -> None:
+        self.exact[point] = self.exact.get(point, 0) + k
+        key = point.rstrip("/")
+        self.stripped[key] = self.stripped.get(key, 0) + k
+
+    def covering(self, inner: str) -> int:
+        n = sum(self.stripped.get(p, 0) for p in _slash_prefixes(inner))
+        return n if inner.endswith("/") else n + self.exact.get(inner, 0)
+
+
+def _covered_entries(entries: list[tuple[int, int, tuple[int, int], str]], parent_of: dict[int, int]) -> set[int]:
+    """Mount ids whose point another entry covers from outside their own parent chain.
+
+    Same rule as the all-pairs scan up to c349396 (kept as the oracle in
+    tests/test_r38_codex_staging_mountinfo.py): entry ``e`` is covered iff some
+    ``o != e``, not among ``e``'s ancestors (following ``parent_of`` until an id
+    outside the table, a self-parent or a repeat), has ``_covers(point(o),
+    point(e))``. SF-R38-02 (Codex on ac933f3): that scan was quadratic. Here ``e``
+    is covered iff the entries covering it, minus itself, outnumber those among
+    its ancestors -- counted with one table-wide :class:`_CoverCount` and one for
+    the current path of a depth-first walk over the parent forest (cycles, which
+    the kernel never writes, are walked as a root whose ancestors are the whole
+    cycle). Linear in the table times the path length.
+    """
+    point_of = {mid: point for mid, _parent, _dev, point in entries}
+
+    def up(mid: int) -> int | None:
+        parent = parent_of[mid]
+        return parent if parent in parent_of and parent != mid else None
+
+    total = _CoverCount()
+    for point in point_of.values():
+        total.add(point)
+    hidden: set[int] = set()
+
+    def judge(mid: int, path: _CoverCount, path_has_self: bool) -> None:
+        on_path = path.covering(point_of[mid]) - (1 if path_has_self else 0)
+        if total.covering(point_of[mid]) - 1 > on_path:
+            hidden.add(mid)
+
+    # Cycles of the parent graph (iterative colouring; up() drops self-parents).
+    on_cycle: dict[int, list[int]] = {}
+    state: dict[int, int] = {}
+    for start in parent_of:
+        trail: list[int] = []
+        mid: int | None = start
+        while mid is not None and mid not in state:
+            state[mid] = 1
+            trail.append(mid)
+            mid = up(mid)
+        if mid is not None and state[mid] == 1:
+            cycle = trail[trail.index(mid) :]
+            for c in cycle:
+                on_cycle[c] = cycle
+        for t in trail:
+            state[t] = 2
+
+    children: dict[int, list[int]] = {}
+    for mid in parent_of:
+        parent = up(mid)
+        if parent is not None and mid not in on_cycle:
+            children.setdefault(parent, []).append(mid)
+
+    def walk(top: int, path: _CoverCount) -> None:
+        # Pre-order over top's subtree; ``path`` holds the ancestors of the node judged.
+        stack: list[tuple[int, bool]] = [(c, False) for c in children.get(top, [])]
+        while stack:
+            mid, leaving = stack.pop()
+            if leaving:
+                path.add(point_of[mid], -1)
+                continue
+            judge(mid, path, False)
+            path.add(point_of[mid])
+            stack.append((mid, True))
+            stack.extend((c, False) for c in children.get(mid, []))
+
+    seen_cycles: set[int] = set()
+    for mid in parent_of:
+        if up(mid) is None:
+            path = _CoverCount()
+            judge(mid, path, False)
+            path.add(point_of[mid])
+            walk(mid, path)
+        elif mid in on_cycle and on_cycle[mid][0] not in seen_cycles:
+            cycle = on_cycle[mid]
+            seen_cycles.add(cycle[0])
+            path = _CoverCount()
+            for c in cycle:
+                path.add(point_of[c])
+            for c in cycle:
+                judge(c, path, True)
+            for c in cycle:
+                walk(c, path)
+    return hidden
 
 
 def _read_mountinfo() -> str | None:

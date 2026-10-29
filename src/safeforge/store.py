@@ -46,7 +46,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import BinaryIO
 
-from . import _faults, db, durable, sqlite_runtime
+from . import _faults, db, durable, mounts, sqlite_runtime
 
 __all__ = [
     "ObjectStore",
@@ -258,22 +258,30 @@ def _kernel_entry(path: str) -> str:
     return os.path.join(os.path.realpath(head or os.curdir), tail)
 
 
-def _same_device_ancestors(path: str) -> list[str]:
-    """SF-R36-01: ``path`` and each ancestor whose parent is on the same filesystem.
+def _same_mount_ancestors(path: str) -> tuple[list[str], str]:
+    """SF-R36-01: ``path`` and each ancestor whose parent is on the same mount.
 
     An earlier open may have created any of these and crashed or failed before
     their parents were synced; on retry ``_missing_dirs`` is empty, so only this
     chain can prove them again. It ends at a mount point: that directory existed
     before the mount, so its entry was never ours to make durable. Resolved with
     ``realpath`` because ``makedirs`` created the entries where the links point.
+
+    R15 (GPT-6, 2026-10-28): the stop used to be "parent has another st_dev",
+    which proves a filesystem boundary but not a mount boundary (bind mounts of
+    the same filesystem share st_dev). :mod:`safeforge.mounts` stops only on
+    proof -- a different st_dev, or the OS's mount identity (statx mount id,
+    /proc/self/mountinfo, GetVolumePathNameW). Without such a source the walk
+    goes on across a same-st_dev mount (more syncs, never fewer). Returns the
+    chain and the name of the proof source (``ObjectStore.layout_mount_basis``).
     """
     out = []
     path = os.path.realpath(path)
-    device = os.stat(path).st_dev
+    mount_probe = mounts.probe(path)
     while True:
         parent = os.path.dirname(path)
-        if parent == path or os.stat(parent).st_dev != device:
-            return out
+        if parent == path or mount_probe.may_stop(path, parent):
+            return out, mount_probe.basis
         out.append(path)
         path = parent
 
@@ -328,6 +336,9 @@ class ObjectStore:
     the directory holding the database, synced after the database exists
     (SF-R28-01); a failed one raises :class:`LayoutNotDurable` instead
     (SF-R25-01). Every entry must be ``"ok"`` for ``durability_prerequisites_ok``.
+    ``layout_mount_basis`` names how the ancestor chain found its mount
+    boundary (:mod:`safeforge.mounts`; ``"st_dev-only"`` = no OS mount
+    identity, the chain then walks through same-st_dev mounts; R15).
     ``sqlite_runtime`` reports the SQLite library behind the connection and
     whether it carries the WAL-reset fix; an affected library never blocks
     open or ingest by default, but ``durability_prerequisites_ok`` stays False
@@ -416,8 +427,10 @@ class ObjectStore:
             # ingest(), where only a raising fsync_dir prevents the ACK.
             # SF-R36-01: the same holds for ancestors ABOVE root that a failed
             # earlier open created (/existing/new/store with /existing unsynced):
-            # the whole same-filesystem chain is re-proven, not only `created`.
-            self.layout_sync = _sync_parents(created + _same_device_ancestors(root) + [root, self.objects_dir, self.staging_dir])
+            # the whole same-mount chain is re-proven, not only `created`.
+            # R15: layout_mount_basis names what proved where the chain stops.
+            ancestors, self.layout_mount_basis = _same_mount_ancestors(root)
+            self.layout_sync = _sync_parents(created + ancestors + [root, self.objects_dir, self.staging_dir])
             failed = sorted(p for p, s in self.layout_sync.items() if s.startswith("failed:"))
             if failed:
                 raise LayoutNotDurable(

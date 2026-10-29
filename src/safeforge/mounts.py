@@ -146,11 +146,11 @@ def _stat_dev(path: str) -> int:
 
 
 def _linux_makedev(major: int, minor: int) -> int:
-    """``st_dev`` for a mountinfo ``major:minor``: ``os.makedev`` where it exists,
-    else glibc's encoding (gnu_dev_makedev), so tests can force the Linux branch
-    on any OS."""
-    if hasattr(os, "makedev"):
-        return os.makedev(major, minor)
+    """``st_dev`` for a mountinfo ``major:minor``, always in glibc's encoding
+    (gnu_dev_makedev). mountinfo exists only on Linux, where this equals
+    ``os.makedev``; the host's ``os.makedev`` is NOT used, because macOS/BSD encode
+    ``major << 24 | minor`` and turned makedev(8, 48) into 134217776 instead of
+    2096 (CI macos-latest on ac933f3)."""
     return ((major & 0xFFFFF000) << 32) | ((major & 0xFFF) << 8) | ((minor & 0xFFFFFF00) << 12) | (minor & 0xFF)
 
 

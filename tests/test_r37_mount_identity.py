@@ -76,6 +76,14 @@ def test_real_kernel_bind_mount_is_proven_by_mountinfo_not_by_st_dev():
     assert blind.may_stop("/tmp/r37probe/outer/mnt", "/tmp/r37probe/outer") is False  # what st_dev alone sees
 
 
+def test_mountinfo_device_numbers_use_the_linux_encoding_on_every_host():
+    # mountinfo is Linux-only; macOS os.makedev encodes major << 24 | minor (CI on ac933f3)
+    assert mounts._linux_makedev(8, 48) == 2096  # real kernel: stat -c %d gave 2096 for 8:48
+    assert mounts._linux_makedev(259, 0) == 259 << 8
+    assert mounts._linux_makedev(0, 256) == 256 << 12  # minor bits above 0xFF move up by 12
+    assert mounts._linux_makedev(4096, 0) == 4096 << 32  # major bits above 0xFFF move up by 32
+
+
 def test_parse_mountinfo_drops_a_mount_covered_by_a_later_one():
     """A bind mount at /a/b/x, then tmpfs over /a/b: /a/b/x now resolves into the tmpfs."""
     base = "22 1 8:1 / / rw - ext4 /dev/sda1 rw\n30 22 8:1 /srv /a/b/x rw - ext4 /dev/sda1 rw\n"

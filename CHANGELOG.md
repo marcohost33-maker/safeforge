@@ -6,6 +6,26 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### R37 (2026-10-29): the ancestor walk stops on mount identity (GPT-6 R15)
+
+- **Fixed R15 (cross-family on 89a0381)**: the SF-R36-01 chain stopped where the
+  parent's `st_dev` changed. `st_dev` names a filesystem, not a mount, so a bind
+  mount of the same filesystem was walked through and its outer directories
+  synced; one that could not be synced refused the open. New
+  `safeforge.mounts`: the walk stops only on proof -- another `st_dev`, the
+  statx mount id (`os.statx`, Python >= 3.15; unique id from Linux 6.8),
+  `/proc/self/mountinfo` (strict; covered mounts dropped; `major:minor` must
+  match) or `GetVolumePathNameW` (Windows). Without a source (macOS, BSD) it
+  keeps walking. `ObjectStore.layout_mount_basis` names the source used.
+- **Still open (R15)**: what a directory fsync is worth on OverlayFS or through
+  a bind mount after a power cut. A real bind-mount and power-cut matrix stays
+  an integration gate; this change only decides which entries are synced.
+- **Checked, unchanged (SF-R35-01)**: the WAL-reset version gate against
+  sqlite.org on 2026-10-29: wal.html section 11 (3.7.0-3.51.2 affected, fixed
+  3.51.3, backports 3.44.6/3.50.7), changes.html (3.52.0 withdrawn), and the
+  branch timelines: on branch-3.44 and branch-3.50 the fix precedes the
+  version bump, so the version number is a valid discriminator.
+
 ### R36 (2026-10-28): three unearned durability reports (Codex on 4f7404d)
 
 - **Fixed SF-R36-01 (P2)**: a retry after a failed open never re-synced an

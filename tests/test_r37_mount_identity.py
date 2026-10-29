@@ -84,6 +84,19 @@ def test_parse_mountinfo_keeps_a_mount_inside_or_on_top():
         MOUNTINFO + "garbage\n",  # one bad line rejects the whole table
         MOUNTINFO + "41 22 8:1 / /other rw - ext4 /dev/sda1 rw\n",  # duplicate mount id
     ],
+    ids=[
+        "empty",
+        "blank-lines",
+        "no-separator",
+        "five-fields",
+        "short-tail",
+        "non-numeric-id",
+        "bad-major-minor",
+        "stray-backslash",
+        "relative-point",
+        "one-bad-line",
+        "duplicate-id",
+    ],
 )
 def test_parse_mountinfo_rejects_malformed_tables(text):
     assert parse_mountinfo(text) is None
@@ -183,10 +196,28 @@ def _probe(**kw):
 
 
 def test_probe_prefers_unique_statx_mount_id(statx_constants):
-    fake = _Statx(0x4000 | 0x1000)
+    fake = _Statx(0x4000 | 0x1000, ids={"/a": 1, "/a/b": 2})
     p = _probe(platform="linux", statx=fake)
     assert p.basis == "statx-mnt-id-unique"
-    assert fake.calls and fake.calls[0][1] & 0x4000, "the unique mount id was not requested"
+    assert p.may_stop("/a/b", "/a") is True
+    assert len(fake.calls) == 3, fake.calls
+    assert all(mask & 0x4000 for _path, mask in fake.calls), "a call did not request the unique mount id: %r" % fake.calls
+
+
+def test_unique_basis_never_compares_a_reusable_id(statx_constants):
+    """The probe saw the unique id; a later answer without it is no statx proof (mountinfo decides)."""
+
+    class Downgrading(_Statx):
+        def __call__(self, path, mask):
+            r = super().__call__(path, mask)
+            if len(self.calls) > 1:
+                r.stx_mask = 0x1000  # only the old, reusable id
+            return r
+
+    fake = Downgrading(0x4000 | 0x1000, ids={"/a": 1, "/a/b": 2})
+    p = _probe(platform="linux", statx=fake, read_mountinfo=lambda: None)
+    assert p.basis == "statx-mnt-id-unique"
+    assert p.may_stop("/a/b", "/a") is False  # ids differ, but they are not the ones the basis names
 
 
 def test_probe_uses_old_statx_mount_id_before_linux_6_8(statx_constants):

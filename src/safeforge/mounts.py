@@ -192,17 +192,18 @@ class MountProbe:
         return False  # st_dev-only: same device is no proof of the same mount; keep walking
 
 
-def _statx_mnt_id(statx) -> tuple[Callable[[str], int | None], int]:
-    mask = os.STATX_MNT_ID | getattr(os, "STATX_MNT_ID_UNIQUE", 0)
-    unique = getattr(os, "STATX_MNT_ID_UNIQUE", 0)
+def _statx_mnt_id(statx, mask: int, want: int) -> Callable[[str], int | None]:
+    """Mount id per path, from the SAME request as the probe (``mask``), and only
+    if the kernel set the bit the basis was named after (``want``): a probe
+    named "unique" never compares a reusable id."""
 
     def mnt_id(path: str) -> int | None:
         r = statx(path, mask)
-        if not r.stx_mask & os.STATX_MNT_ID and not (unique and r.stx_mask & unique):
+        if not r.stx_mask & want:
             return None
         return r.stx_mnt_id
 
-    return mnt_id, unique
+    return mnt_id
 
 
 _REAL = object()
@@ -233,15 +234,18 @@ def probe(
         if parsed is not None:
             mount_points = {point: _linux_makedev(*dev) for point, dev in parsed.items()}
         if statx is not None and hasattr(os, "STATX_MNT_ID"):
-            mnt_id, unique = _statx_mnt_id(statx)
+            unique = getattr(os, "STATX_MNT_ID_UNIQUE", 0)
+            mask = os.STATX_MNT_ID | unique
             try:
-                r = statx(start, os.STATX_MNT_ID | unique)
+                r = statx(start, mask)
             except OSError:
                 r = None  # e.g. ENOSYS/EPERM under a seccomp filter: no statx proof
             if r is not None:
                 if unique and r.stx_mask & unique:
+                    mnt_id = _statx_mnt_id(statx, mask, unique)
                     return MountProbe("statx-mnt-id-unique", stat_dev=stat_dev, mnt_id=mnt_id, mount_points=mount_points)
                 if r.stx_mask & os.STATX_MNT_ID:
+                    mnt_id = _statx_mnt_id(statx, mask, os.STATX_MNT_ID)
                     return MountProbe("statx-mnt-id", stat_dev=stat_dev, mnt_id=mnt_id, mount_points=mount_points)
         if mount_points is not None:
             return MountProbe("mountinfo", stat_dev=stat_dev, mount_points=mount_points)

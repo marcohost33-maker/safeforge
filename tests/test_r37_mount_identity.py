@@ -51,6 +51,31 @@ def test_parse_mountinfo_reads_mount_points_and_decodes_escapes():
     assert parse_mountinfo(MOUNTINFO) == {"/": (8, 1), "/proc": (0, 21), "/mnt/with space": (8, 1), "/mnt/bind": (8, 1)}
 
 
+# Captured 2026-10-29 from a real kernel (WSL2 6.6.87.2, docker-desktop distro, root):
+# `mount --bind /tmp/r37probe/src /tmp/r37probe/outer/mnt`; `stat -c %d` gave 2096 for
+# BOTH outer/ and outer/mnt -- the bind mount is invisible to st_dev. 2096 == makedev(8, 48).
+REAL_BIND = (
+    "80 65 8:48 / / rw,relatime - ext4 /dev/sdd rw,discard,errors=remount-ro,data=ordered\n"
+    "75 80 0:29 / /lib/modules/6.6.87.2-microsoft-standard-WSL2 rw,nosuid,nodev,noatime - overlay none "
+    "rw,lowerdir=/modules,upperdir=/lib/modules/6.6.87.2-microsoft-standard-WSL2/rw/upper,"
+    "workdir=/lib/modules/6.6.87.2-microsoft-standard-WSL2/rw/work,uuid=on\n"
+    "130 80 8:48 /tmp/r37probe/src /tmp/r37probe/outer/mnt rw,relatime - ext4 /dev/sdd "
+    "rw,discard,errors=remount-ro,data=ordered\n"
+)
+
+
+def test_real_kernel_bind_mount_is_proven_by_mountinfo_not_by_st_dev():
+    real_dev = {"/tmp/r37probe/outer": 2096, "/tmp/r37probe/outer/mnt": 2096}
+    parsed = parse_mountinfo(REAL_BIND)
+    assert parsed is not None and parsed["/tmp/r37probe/outer/mnt"] == (8, 48)
+    mnt = "/tmp/r37probe/outer/mnt"
+    p = mounts.probe(mnt, platform="linux", statx=None, read_mountinfo=lambda: REAL_BIND, stat_dev=real_dev.get)
+    assert p.basis == "mountinfo"
+    assert p.may_stop("/tmp/r37probe/outer/mnt", "/tmp/r37probe/outer") is True
+    blind = MountProbe("st_dev-only", stat_dev=real_dev.get)
+    assert blind.may_stop("/tmp/r37probe/outer/mnt", "/tmp/r37probe/outer") is False  # what st_dev alone sees
+
+
 def test_parse_mountinfo_drops_a_mount_covered_by_a_later_one():
     """A bind mount at /a/b/x, then tmpfs over /a/b: /a/b/x now resolves into the tmpfs."""
     base = "22 1 8:1 / / rw - ext4 /dev/sda1 rw\n30 22 8:1 /srv /a/b/x rw - ext4 /dev/sda1 rw\n"

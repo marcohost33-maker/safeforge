@@ -6,6 +6,22 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### R38 (2026-10-29): external staging chain, linear mount table (Codex on ac933f3)
+
+- **Fixed SF-R38-01 (P2)**: a `staging_dir` outside `root` has its own ancestor
+  chain, which the SF-R36-01 walk never covered. A failed open that created
+  `/external/new/spool/staging` with `/external` unsynced was forgotten on
+  retry (nothing "created"), and the retry ACKed -- with an explicit `db_path`
+  in `/external/new/spool`. Every open now also walks the staging chain, with
+  the same mount probe (no second mountinfo parse). Cost: one stat walk and
+  one directory fsync per ancestor level that root's chain does not share.
+- **Fixed SF-R38-02 (P2)**: `parse_mountinfo` scanned the whole table for each
+  entry to drop covered mounts (quadratic; 6,000 sibling mounts took 36 s
+  here). A prefix index plus path counters over the mount parent forest give
+  the same result in linear work: a differential test against the previous
+  algorithm (3,000 random tables incl. cycles, self-parents and trailing
+  slashes) and a line-count budget under `sys.settrace`, not a wall clock.
+
 ### R37 (2026-10-29): the ancestor walk stops on mount identity (GPT-6 R15)
 
 - **Fixed R15 (cross-family on 89a0381)**: the SF-R36-01 chain stopped where the

@@ -230,7 +230,11 @@ def test_probe_falls_back_to_mountinfo_when_statx_reports_no_mount_id(statx_cons
 
 @pytest.mark.parametrize("err", [errno.ENOSYS, errno.EPERM])
 def test_probe_falls_back_to_mountinfo_when_statx_is_blocked(statx_constants, err):
-    assert _probe(platform="linux", statx=_Statx(0x1000, error=err)).basis == "mountinfo"
+    try:
+        p = _probe(platform="linux", statx=_Statx(0x1000, error=err))
+    except OSError as e:
+        pytest.fail("a blocked statx must fall back, not abort the open: %r" % e)
+    assert p.basis == "mountinfo"
 
 
 def test_probe_mountinfo_without_statx():

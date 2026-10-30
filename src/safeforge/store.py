@@ -143,6 +143,16 @@ class IngestResult:
     file_sync: str = ""
     staging_sync: str = ""
     durability_prerequisites_ok: bool = False
+    # SF-R39-02 (question 3 of the 2026-10-29 second round): the evidence the flag stands on, so a
+    # consumer can tell how it was reached without asking the store. ``layout_mount_basis`` names
+    # what ended the ancestor walk (``ObjectStore.layout_mount_basis``): "st_dev-only" (macOS, BSD)
+    # walked through every same-device mount and synced more, never less, so it does not lower the
+    # flag. ``sqlite_version`` / ``sqlite_wal_reset_fixed`` are the library behind this store's
+    # connection (``ObjectStore.sqlite_runtime``). Empty/False on a deduplicated result, which
+    # attests nothing about the earlier ingest.
+    layout_mount_basis: str = ""
+    sqlite_version: str = ""
+    sqlite_wal_reset_fixed: bool = False
 
     @property
     def powercut_durable(self) -> bool:
@@ -765,7 +775,20 @@ class ObjectStore:
             and fsync_status == dsync == ssync == "ok"
             and self.sqlite_runtime.get("fixed") is True
         )
-        return IngestResult(oid, digest, size, False, mech, dsync, fsync_status, ssync, durable_ack)
+        return IngestResult(
+            oid,
+            digest,
+            size,
+            False,
+            mech,
+            dsync,
+            fsync_status,
+            ssync,
+            durable_ack,
+            layout_mount_basis=self.layout_mount_basis,
+            sqlite_version=str(self.sqlite_runtime.get("version", "")),
+            sqlite_wal_reset_fixed=self.sqlite_runtime.get("fixed") is True,
+        )
 
     def _dedup(self, hit: tuple[str, str, str, int], digest: str | None) -> IngestResult:
         oid, status, sha, size = hit

@@ -6,6 +6,66 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### R41 (2026-10-30): the durability flag observes the filesystem; real boundary libraries and mounts
+
+Roadmap R4/R5 (2026-10-29), SafeForge P0 "filesystem durability cross-platform
+and fail-safe assumptions"; GPT-6 A2 "Branch-Backportmatrix" and
+"Linux-Mount/Powercut-Injection"; R15/R37 "a real bind-mount matrix stays an
+integration gate".
+
+- **Fixed SF-R41-01 (P1)**: `durability_prerequisites_ok` was True on tmpfs.
+  Reproduced on 70d9009 (Linux, `/dev/shm`, library pinned fixed): file,
+  objects/ and staging/ syncs "ok", flag True -- tmpfs answers fsync with
+  success and loses everything on a power cut. Debian 13 puts /tmp on tmpfs,
+  so this is a default, not an exotic setup. New `safeforge.filesystems`
+  classifies the filesystem under root/, objects/, staging/ and the database:
+  `volatile` (tmpfs, ramfs, overlayfs `volatile`/`fsync=volatile` or with its
+  upper directory on tmpfs), `network` (NFS, SMB/CIFS, 9p, Ceph, GlusterFS,
+  Lustre, AFS, sshfs, WebDAV, AFP; macOS without `MNT_LOCAL`), `unknown` (no
+  or malformed mount table, an overlayfs whose upper directory is not visible
+  -- a container's root --, two sibling mounts on one point) or `local`.
+  Sources: Linux `/proc/self/mountinfo` (same strict parser, now also fstype
+  and both option sets: `mounts.parse_mountinfo_filesystems`), macOS
+  `statfs(2)` via ctypes (accepted only if the reported mount point contains
+  the path), Windows `GetDriveTypeW`/`GetVolumeInformationW`. The flag now
+  needs `filesystem_class == "local"`; `IngestResult.filesystem_class` and
+  `ObjectStore.layout_filesystems` report it. Open and ingest are unchanged.
+  Regression on the real `/dev/shm`; 16/16 mutants of the new guards killed
+  by assertion. First CI run red on macOS and Windows, both fixed: macOS
+  firmlinks (/private/var, /Users -> /System/Volumes/Data) defeat a mount-point
+  prefix check, so `statfs` is now accepted when the mount point and the path
+  share `st_dev`; the pure Linux tests normalised `upperdir` with the host's
+  `os.path` (backslashes on Windows) -- now `posixpath`. Real-statfs and
+  real-volume tests added for macOS and Windows. Codex on d4681e4, both P2,
+  both fixed: (1) the ambiguous-point pass scanned the table once per hidden
+  point -- quadratic again (6,000 hidden child mounts: 1.0 s); one counting
+  pass now, guarded by an R38-style line budget for both parsers; (2) only the
+  database's directory was classified, so a file bind mount of the database
+  from tmpfs counted as local; the resolved database file is classified too. **Behaviour change:** a store inside a container's writable
+  layer (root overlay) reports `unknown` and no longer claims durability --
+  mount a volume.
+- **SQLite boundary matrix (CI job `sqlite-real`)**: 3.51.2 (last affected),
+  3.51.3 (first fixed), 3.54.1, and the branch backports 3.50.7 and 3.44.6,
+  each built from the official mirror pinned by git commit and Fossil check-in.
+  `build_sqlite.sh` also checks the fix in the CODE: walCheckpoint() in
+  src/wal.c gains a comparison of the live wal-index salt with the header's in
+  3.51.3; that line is present in 3.51.3, 3.54.1, 3.50.7, 3.44.6 and absent in
+  3.51.2 (checked on the pinned trees), and a build whose marker disagrees with
+  its "fixed" column fails. The gate runs in the release profile without a
+  waiver and must exit 0 / 1. Required tests (`SAFEFORGE_EXPECT_SQLITE`,
+  `..._FIXED`, `..._SOURCE_ID`; renamed from R40's
+  `SAFEFORGE_EXPECT_FIXED_SQLITE*`) cover both directions: on the affected
+  build the gate fails, a release waiver is refused, `require_wal_reset_fix`
+  refuses before creating anything and the flag stays False. The affected path
+  was also run here against the sandbox's real 3.45.1.
+- **Real kernel mounts (CI job `mounts`)**: `experiments/mounts/mount_matrix.sh`
+  mounts a same-device bind mount, tmpfs, and overlayfs on disk, on tmpfs and
+  `volatile`; required tests (`SAFEFORGE_MOUNT_MATRIX`) check class and flag
+  per mount and that the ancestor walk stops at the bind mount although
+  `st_dev` is equal -- R15 on a live kernel, not a recorded line.
+- Still open: a power cut THROUGH a bind mount or overlayfs (LazyFS under
+  them); a RAM disk formatted with a disk filesystem looks local.
+
 ### R40 (2026-10-30): the fixed-library path runs for real; review of R39
 
 Critical review of R39 against primary data (CI logs of run 40984016099).

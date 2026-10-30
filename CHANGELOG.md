@@ -36,7 +36,12 @@ integration gate".
   prefix check, so `statfs` is now accepted when the mount point and the path
   share `st_dev`; the pure Linux tests normalised `upperdir` with the host's
   `os.path` (backslashes on Windows) -- now `posixpath`. Real-statfs and
-  real-volume tests added for macOS and Windows. **Behaviour change:** a store inside a container's writable
+  real-volume tests added for macOS and Windows. Codex on d4681e4, both P2,
+  both fixed: (1) the ambiguous-point pass scanned the table once per hidden
+  point -- quadratic again (6,000 hidden child mounts: 1.0 s); one counting
+  pass now, guarded by an R38-style line budget for both parsers; (2) only the
+  database's directory was classified, so a file bind mount of the database
+  from tmpfs counted as local; the resolved database file is classified too. **Behaviour change:** a store inside a container's writable
   layer (root overlay) reports `unknown` and no longer claims durability --
   mount a volume.
 - **SQLite boundary matrix (CI job `sqlite-real`)**: 3.51.2 (last affected),

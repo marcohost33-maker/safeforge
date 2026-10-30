@@ -508,8 +508,13 @@ class ObjectStore:
             # fsync with "ok" and loses everything on a power cut; a network or an
             # unobservable filesystem is not a local durability prerequisite either.
             # A report and a condition of durability_prerequisites_ok, never a refusal.
-            db_dir = os.path.dirname(os.path.realpath(_kernel_entry(self.db_path)))
-            self.layout_filesystems = filesystems.filesystems([root, self.objects_dir, self.staging_dir, db_dir])
+            # The database FILE as well as its directory: a file bind mount (tmpfs
+            # into a local directory) is a mount point of its own (Codex on d4681e4).
+            # The directory stays for the -wal/-shm sidecars SQLite creates next to it.
+            db_file = os.path.realpath(_kernel_entry(self.db_path))
+            self.layout_filesystems = filesystems.filesystems(
+                [root, self.objects_dir, self.staging_dir, os.path.dirname(db_file), db_file]
+            )
             self.filesystem_class = filesystems.aggregate(self.layout_filesystems.values())
 
         except BaseException:

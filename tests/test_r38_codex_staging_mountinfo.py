@@ -30,7 +30,7 @@ import pytest
 
 from safeforge import mounts
 from safeforge import store as store_mod
-from safeforge.mounts import parse_mountinfo
+from safeforge.mounts import parse_mountinfo, parse_mountinfo_filesystems
 from safeforge.store import IngestError, IngestResult, ObjectStore
 
 durable = store_mod.durable
@@ -186,6 +186,25 @@ def test_r38_02_stacked_mounts_parse_in_linear_work():
     lines = _line_events(lambda: result.update(parse_mountinfo(text)), budget=_LINES_PER_ENTRY * (_N + 1))
     assert lines is not None, "parse_mountinfo exceeded %d lines per entry on %d stacked mounts" % (_LINES_PER_ENTRY, _N)
     assert result == {"/": (8, 1), "/mnt/stack": (0, 100 + _N - 1)}
+
+
+def _hidden_children(n: int) -> str:
+    """n mounts under /mnt/a, then a tmpfs over /mnt/a: all n become unreachable (R41 ambiguity pass)."""
+    return (
+        _ROOT_LINE
+        + "".join("%d 22 0:%d / /mnt/a/c%d rw - ext4 /dev/sdb rw\n" % (100 + i, 100 + i, i) for i in range(n))
+        + "%d 22 0:9 / /mnt/a rw - tmpfs tmpfs rw\n" % (100 + n)
+    )
+
+
+@pytest.mark.parametrize("parse", [parse_mountinfo, parse_mountinfo_filesystems])
+def test_r41_hidden_children_parse_in_linear_work(parse):
+    """Codex on d4681e4 (P2): the ambiguous-point pass scanned the table once per hidden point."""
+    text = _hidden_children(_N)
+    result = {}
+    lines = _line_events(lambda: result.update(parse(text)), budget=_LINES_PER_ENTRY * (_N + 2))
+    assert lines is not None, "%s exceeded %d lines per entry on %d hidden mounts" % (parse.__name__, _LINES_PER_ENTRY, _N)
+    assert set(result) == {"/", "/mnt/a"}
 
 
 def test_r38_02_line_counter_sees_the_parser():

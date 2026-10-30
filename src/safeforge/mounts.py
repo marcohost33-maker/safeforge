@@ -157,8 +157,12 @@ def _parse_visible(text: str) -> tuple[_Visible, set[str]] | None:
     for mid, _parent, dev, point in entries:
         if mid not in hidden:
             visible[point] = (dev, filesystems[mid])
-    ambiguous = {point for _mid, _parent, _dev, point in entries} - set(visible)
-    ambiguous = {p for p in ambiguous if sum(1 for e in entries if e[3] == p) > 1}
+    # Points with two or more entries, none reachable. One counting pass: a
+    # per-point scan of the table was quadratic again (Codex on d4681e4, P2).
+    occurrences: dict[str, int] = {}
+    for _mid, _parent, _dev, point in entries:
+        occurrences[point] = occurrences.get(point, 0) + 1
+    ambiguous = {p for p, n in occurrences.items() if n > 1 and p not in visible}
     return visible, ambiguous
 
 

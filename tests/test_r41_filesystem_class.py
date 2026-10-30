@@ -313,3 +313,27 @@ def test_required_real_bind_mount_stops_the_walk():
     assert s.layout_mount_basis in ("mountinfo", "statx-mnt-id", "statx-mnt-id-unique")
     assert point in s.layout_sync  # parent of a/ is synced ...
     assert outer not in s.layout_sync  # ... the walk stops at the mount point, outer/ is not ours
+
+
+def test_a_database_file_bind_mounted_from_tmpfs_is_volatile(tmp_path, monkeypatch):
+    """Codex on d4681e4 (P2): only the database DIRECTORY was classified; a file bind mount
+    of the database itself (tmpfs into a local directory) slipped through as local."""
+    real = filesystems.filesystems
+    seen = []
+
+    def db_file_on_tmpfs(paths, **kw):
+        paths = list(paths)
+        seen.extend(paths)
+        out = real(paths, **kw)
+        return {p: ({**i, "fstype": "tmpfs", "class": "volatile"} if p.endswith("safeforge.db") else i) for p, i in out.items()}
+
+    monkeypatch.setattr(filesystems, "filesystems", db_file_on_tmpfs)
+    s, r = _ingest(str(tmp_path / "root"))
+    assert any(p.endswith("safeforge.db") for p in seen), seen
+    assert (r.filesystem_class, r.durability_prerequisites_ok) == ("volatile", False)
+
+
+def test_classify_linux_sees_a_file_bind_mount():
+    tab = mounts.parse_mountinfo_filesystems(TABLE + "\n70 22 0:26 /db /srv/store/meta.db rw - tmpfs tmpfs rw")
+    assert classify_linux("/srv/store/meta.db", tab)["class"] == "volatile"
+    assert classify_linux("/srv/store", tab)["class"] == "local"  # the directory alone hides it

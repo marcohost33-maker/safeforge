@@ -18,7 +18,8 @@ Contract tested here:
   ``WalResetBugUnfixed`` (a ``ConfigurationError``) BEFORE touching the disk;
 * ``ObjectStore.sqlite_runtime`` reports the library its own connection uses;
 * the release gate (``python -m safeforge.sqlite_gate``) fails on an
-  affected library unless a non-blank waiver reason is given, and prints it.
+  affected library; only ``--profile ci`` takes a structured waiver and
+  prints it (waiver rules in detail: tests/test_r39_release_waiver.py).
 
 Every negative test has a positive control: a forced "fixed" status passes,
 so an implementation that always refuses cannot pass this file.
@@ -26,6 +27,7 @@ so an implementation that always refuses cannot pass this file.
 
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import sqlite3
@@ -256,6 +258,7 @@ def test_store_accepts_fixed_library_positive_control(tmp_path, monkeypatch):
 
 _FIXED = sqlite_wal_reset_status((3, 51, 3), SID)
 _UNFIXED = sqlite_wal_reset_status((3, 51, 2), SID)
+_TODAY = datetime.date(2026, 10, 30)
 
 
 def test_gate_pass_on_fixed():
@@ -270,21 +273,23 @@ def test_gate_fails_on_unfixed_without_waiver():
 
 
 def test_gate_waiver_is_visible():
-    r = release_gate(_UNFIXED, {WAIVER_ENV: "  PR CI, not a release  "})
+    # SF-R39-01: only profile "ci" takes a waiver, and only the structured form.
+    w = "expires=2026-11-30; reason=  PR CI, not a release  "
+    r = release_gate(_UNFIXED, {WAIVER_ENV: w}, profile="ci", today=_TODAY)
     assert (r["verdict"], r["exit_code"]) == ("waived", 0)
-    assert r["waiver_reason"] == "PR CI, not a release"
+    assert r["waiver"] == {"expires": "2026-11-30", "reason": "PR CI, not a release"}
 
 
 @pytest.mark.parametrize("blank", ["", "   ", "\t\n"])
 def test_gate_blank_waiver_is_not_a_waiver(blank):
-    r = release_gate(_UNFIXED, {WAIVER_ENV: blank})
+    r = release_gate(_UNFIXED, {WAIVER_ENV: blank}, profile="ci", today=_TODAY)
     assert (r["verdict"], r["exit_code"]) == ("invalid-waiver", 2)
 
 
 def test_gate_fixed_with_waiver_still_pass_and_reports_it():
     r = release_gate(_FIXED, {WAIVER_ENV: "reason"})
     assert (r["verdict"], r["exit_code"]) == ("pass", 0)
-    assert r["waiver_reason"] == "reason"
+    assert r["waiver_offered"] is True and r["waiver"] is None
 
 
 @pytest.mark.parametrize("forged", ["yes", 1, None])
@@ -293,13 +298,14 @@ def test_gate_rejects_truthy_non_bool_fixed(forged):
     assert r["exit_code"] != 0
 
 
-def _run_gate(extra_env: dict[str, str] | None):
+def _run_gate(extra_env: dict[str, str] | None, *args: str):
     env = child_env()
-    env.pop(WAIVER_ENV, None)
+    for k in (WAIVER_ENV, "GITHUB_REF_TYPE", "GITHUB_EVENT_NAME"):
+        env.pop(k, None)
     if extra_env:
         env.update(extra_env)
     p = subprocess.run(
-        [sys.executable, "-m", "safeforge.sqlite_gate"],
+        [sys.executable, "-m", "safeforge.sqlite_gate", *args],
         cwd=REPO,
         env=env,
         stdin=subprocess.DEVNULL,
@@ -310,25 +316,35 @@ def _run_gate(extra_env: dict[str, str] | None):
     return p.returncode, json.loads(p.stdout), p.stderr
 
 
+def _ci_waiver(days: int = 30) -> str:
+    expires = datetime.datetime.now(datetime.UTC).date() + datetime.timedelta(days=days)
+    return "expires=%s; reason=test waiver" % expires.isoformat()
+
+
 def test_gate_cli_real_runtime_without_waiver():
     rc, out, err = _run_gate(None)
     assert "RuntimeWarning" not in err  # runpy double import (gate module outside the package graph)
     fixed = loaded_sqlite_status()["fixed"]
     assert out["sqlite"]["version"] == sqlite3.sqlite_version
     assert out["sqlite"]["source_id"] == _real_source_id()
+    assert out["profile"] == "release"
     assert rc == (0 if fixed else 1)
     assert out["verdict"] == ("pass" if fixed else "fail")
 
 
-def test_gate_cli_real_runtime_with_waiver():
-    rc, out, _ = _run_gate({WAIVER_ENV: "test waiver"})
+def test_gate_cli_real_runtime_with_ci_waiver():
+    rc, out, _ = _run_gate({WAIVER_ENV: _ci_waiver()}, "--profile", "ci")
     assert rc == 0
-    assert out["waiver_reason"] == "test waiver"
-    assert out["verdict"] == ("pass" if loaded_sqlite_status()["fixed"] else "waived")
+    assert out["profile"] == "ci"
+    if loaded_sqlite_status()["fixed"]:
+        assert out["verdict"] == "pass"
+    else:
+        assert out["verdict"] == "waived"
+        assert out["waiver"]["reason"] == "test waiver"
 
 
 def test_gate_cli_blank_waiver_fails():
-    rc, out, _ = _run_gate({WAIVER_ENV: "  "})
+    rc, out, _ = _run_gate({WAIVER_ENV: "  "}, "--profile", "ci")
     if loaded_sqlite_status()["fixed"]:
         assert rc == 0
     else:

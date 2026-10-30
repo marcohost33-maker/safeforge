@@ -225,7 +225,7 @@ def test_store_reports_its_own_runtime(tmp_path):
     with ObjectStore(str(tmp_path / "root")) as s:
         st = s.sqlite_runtime
         # Keys first: a missing report must fail as an assertion, not a KeyError (DK run 1).
-        assert set(st) == {"fixed", "version", "source_id", "reason"}, st
+        assert set(st) == {"fixed", "version", "source_id", "source_canonical", "reason"}, st
         assert st["version"] == sqlite3.sqlite_version
         assert st["source_id"] == _real_source_id()
         assert st["fixed"] is sqlite_wal_reset_status(sqlite3.sqlite_version_info, _real_source_id())["fixed"]
@@ -277,7 +277,7 @@ def test_gate_waiver_is_visible():
     w = "expires=2026-11-30; reason=  PR CI, not a release  "
     r = release_gate(_UNFIXED, {WAIVER_ENV: w}, profile="ci", today=_TODAY)
     assert (r["verdict"], r["exit_code"]) == ("waived", 0)
-    assert r["waiver"] == {"expires": "2026-11-30", "reason": "PR CI, not a release"}
+    assert r["waiver"] == {"expires": "2026-11-30", "reason": "PR CI, not a release", "days_left": 31}
 
 
 @pytest.mark.parametrize("blank", ["", "   ", "\t\n"])
@@ -300,7 +300,7 @@ def test_gate_rejects_truthy_non_bool_fixed(forged):
 
 def _run_gate(extra_env: dict[str, str] | None, *args: str):
     env = child_env()
-    for k in (WAIVER_ENV, "GITHUB_REF_TYPE", "GITHUB_EVENT_NAME"):
+    for k in (WAIVER_ENV, "GITHUB_REF_TYPE", "GITHUB_EVENT_NAME", "GITHUB_ACTIONS", "GITHUB_STEP_SUMMARY"):
         env.pop(k, None)
     if extra_env:
         env.update(extra_env)

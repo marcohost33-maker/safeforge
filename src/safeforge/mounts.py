@@ -59,7 +59,7 @@ import re
 import sys
 from collections.abc import Callable
 
-__all__ = ["MountProbe", "parse_mountinfo", "probe"]
+__all__ = ["MountProbe", "parse_mountinfo", "parse_mountinfo_filesystems", "probe"]
 
 _MOUNTINFO = "/proc/self/mountinfo"
 _OCTAL = re.compile(r"\\([0-7]{3})")
@@ -80,6 +80,36 @@ def _covers(outer: str, inner: str) -> bool:
 
 
 def parse_mountinfo(text: str) -> dict[str, tuple[int, int]] | None:
+    parsed = _parse_visible(text)
+    return None if parsed is None else {point: dev for point, (dev, _fs) in parsed[0].items()}
+
+
+def parse_mountinfo_filesystems(text: str) -> dict[str, tuple[str, frozenset[str], frozenset[str]]] | None:
+    """Visible mount points -> ``(fstype, mount options, super options)``; None if malformed (R41).
+
+    Same strict parser and the same covered-entry rule as :func:`parse_mountinfo`,
+    so a path resolves to the filesystem it can actually reach. Options are the
+    comma-separated fields 6 (per mount) and the last field (per superblock).
+
+    A point whose entries ALL drop out (two siblings on one point cover each
+    other, e.g. after mount propagation) maps to ``("", frozenset(), frozenset())``:
+    which filesystem a path there reaches is not decidable from the table, and
+    falling back to the parent mount could name the wrong one.
+    """
+    parsed = _parse_visible(text)
+    if parsed is None:
+        return None
+    visible, ambiguous = parsed
+    out = {point: fs for point, (_dev, fs) in visible.items()}
+    for point in ambiguous:
+        out.setdefault(point, ("", frozenset(), frozenset()))
+    return out
+
+
+_Visible = dict[str, tuple[tuple[int, int], tuple[str, frozenset[str], frozenset[str]]]]
+
+
+def _parse_visible(text: str) -> tuple[_Visible, set[str]] | None:
     """Visible mount points of a ``/proc/self/mountinfo`` text -> ``(major, minor)``; None if malformed.
 
     Line format (proc_pid_mountinfo(5)): ``id parent major:minor root mountpoint
@@ -95,6 +125,7 @@ def parse_mountinfo(text: str) -> dict[str, tuple[int, int]] | None:
     if type(text) is not str:
         raise TypeError("mountinfo text must be str")
     entries: list[tuple[int, int, tuple[int, int], str]] = []
+    filesystems: dict[int, tuple[str, frozenset[str], frozenset[str]]] = {}
     for line in text.splitlines():
         if not line:
             continue
@@ -111,18 +142,24 @@ def parse_mountinfo(text: str) -> dict[str, tuple[int, int]] | None:
         point = _unescape(head[4])
         if point is None or not point.startswith("/"):
             return None
+        fstype = _unescape(tail[0])
+        if not fstype:
+            return None
         entries.append((int(head[0]), int(head[1]), (int(dev.group(1)), int(dev.group(2))), point))
+        filesystems[int(head[0])] = (fstype, frozenset(head[5].split(",")), frozenset(tail[-1].split(",")))
     if not entries:
         return None
     parent_of = {mid: parent for mid, parent, _dev, _point in entries}
     if len(parent_of) != len(entries):
         return None
     hidden = _covered_entries(entries, parent_of)
-    visible: dict[str, tuple[int, int]] = {}
+    visible: _Visible = {}
     for mid, _parent, dev, point in entries:
         if mid not in hidden:
-            visible[point] = dev
-    return visible
+            visible[point] = (dev, filesystems[mid])
+    ambiguous = {point for _mid, _parent, _dev, point in entries} - set(visible)
+    ambiguous = {p for p in ambiguous if sum(1 for e in entries if e[3] == p) > 1}
+    return visible, ambiguous
 
 
 def _slash_prefixes(inner: str) -> list[str]:

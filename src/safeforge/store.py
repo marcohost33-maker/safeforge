@@ -46,7 +46,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import BinaryIO
 
-from . import _faults, db, durable, mounts, sqlite_runtime
+from . import _faults, db, durable, filesystems, mounts, sqlite_runtime
 
 __all__ = [
     "ObjectStore",
@@ -153,6 +153,11 @@ class IngestResult:
     layout_mount_basis: str = ""
     sqlite_version: str = ""
     sqlite_wal_reset_fixed: bool = False
+    # SF-R41-01: the class of the filesystems holding root/, objects/, staging/ and the database
+    # (``ObjectStore.filesystem_class``, :mod:`safeforge.filesystems`): "local", "volatile" (tmpfs,
+    # ramfs, overlayfs volatile or on tmpfs), "network" or "unknown". Only "local" lets the flag
+    # be True. Empty on a deduplicated result.
+    filesystem_class: str = ""
 
     @property
     def powercut_durable(self) -> bool:
@@ -362,6 +367,10 @@ class ObjectStore:
     library before anything is created (decision E2, 2026-10-27: default
     False, because every python.org build is affected; releases are held by
     ``python -m safeforge.sqlite_gate``).
+    ``layout_filesystems`` / ``filesystem_class`` name the filesystems holding
+    root/, objects/, staging/ and the database (:mod:`safeforge.filesystems`);
+    ``durability_prerequisites_ok`` needs every one ``"local"`` -- on tmpfs every
+    fsync says "ok" and a power cut still erases the store (SF-R41-01).
     """
 
     def __init__(
@@ -495,6 +504,13 @@ class ObjectStore:
                 for stmt in filter(None, (s.strip() for s in _SCHEMA.split(";"))):
                     self._conn.execute(stmt)
             self._sync_db_dirs()
+            # SF-R41-01: the filesystems the syncs above ran on. tmpfs answers every
+            # fsync with "ok" and loses everything on a power cut; a network or an
+            # unobservable filesystem is not a local durability prerequisite either.
+            # A report and a condition of durability_prerequisites_ok, never a refusal.
+            db_dir = os.path.dirname(os.path.realpath(_kernel_entry(self.db_path)))
+            self.layout_filesystems = filesystems.filesystems([root, self.objects_dir, self.staging_dir, db_dir])
+            self.filesystem_class = filesystems.aggregate(self.layout_filesystems.values())
 
         except BaseException:
             if hasattr(self, "_conn"):
@@ -774,6 +790,7 @@ class ObjectStore:
             and layout_ok
             and fsync_status == dsync == ssync == "ok"
             and self.sqlite_runtime.get("fixed") is True
+            and self.filesystem_class == "local"
         )
         return IngestResult(
             oid,
@@ -788,6 +805,7 @@ class ObjectStore:
             layout_mount_basis=self.layout_mount_basis,
             sqlite_version=str(self.sqlite_runtime.get("version", "")),
             sqlite_wal_reset_fixed=self.sqlite_runtime.get("fixed") is True,
+            filesystem_class=self.filesystem_class,
         )
 
     def _dedup(self, hit: tuple[str, str, str, int], digest: str | None) -> IngestResult:

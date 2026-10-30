@@ -59,6 +59,37 @@ jobs:
           SAFEFORGE_ALLOW_UNFIXED_SQLITE: "expires=2027-01-31; reason=PR/main CI is not a release, runtime blocking is owner decision E2 (I1026-07)"
       - run: python -m pytest -p no:cacheprovider
 
+  # The only job with a SQLite that carries the WAL-reset fix (>= 3.51.3): no
+  # runner image ships one (run 40984016099: 3.45.1 / 3.49.1 / 3.50.4). Built
+  # from the official mirror pinned by commit (experiments/sqlite/build_sqlite.sh)
+  # and loaded through LD_LIBRARY_PATH. The gate runs in the release profile
+  # WITHOUT a waiver, and SAFEFORGE_EXPECT_FIXED_SQLITE makes the real-library
+  # tests mandatory: a library that did not take effect fails them (R40).
+  sqlite-fixed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends tcl
+      - run: experiments/sqlite/build_sqlite.sh "$RUNNER_TEMP/sqlite-build"
+      - run: python -m pip install pytest==9.1.1
+      - run: python -c "import sqlite3, sys; print(sys.version, sqlite3.sqlite_version)"
+        env:
+          LD_LIBRARY_PATH: ${{ runner.temp }}/sqlite-build/lib
+      - run: python -m safeforge.sqlite_gate
+        env:
+          PYTHONPATH: src
+          LD_LIBRARY_PATH: ${{ runner.temp }}/sqlite-build/lib
+      - run: python -m pytest -p no:cacheprovider -rs
+        env:
+          LD_LIBRARY_PATH: ${{ runner.temp }}/sqlite-build/lib
+          SAFEFORGE_EXPECT_FIXED_SQLITE: "3.54.1"
+
   # Power cut, data half: LazyFS drops every unsynced byte (tests/lazyfs_harness.py).
   # REQUIRED=1 turns a broken FUSE/LazyFS setup into a failure instead of a skip.
   powerloss:

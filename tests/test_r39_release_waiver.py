@@ -80,7 +80,7 @@ def test_fixed_library_passes_in_every_profile_positive_control(profile):
 def test_ci_structured_waiver_passes_positive_control():
     r = _gate(UNFIXED, {WAIVER_ENV: GOOD}, profile="ci")
     assert (r["verdict"], r["exit_code"]) == ("waived", 0)
-    assert r["waiver"] == {"expires": "2026-12-31", "reason": "PR CI is not a release (owner decision E2)"}
+    assert r["waiver"] == {"expires": "2026-12-31", "reason": "PR CI is not a release (owner decision E2)", "days_left": 62}
 
 
 # -- CI waivers must be structured and time-bound -------------------------------
@@ -172,7 +172,7 @@ def test_unknown_profile_is_refused(bad):
 
 def _cli(env_extra: dict[str, str], *args: str):
     env = child_env()
-    for k in (WAIVER_ENV, "GITHUB_REF_TYPE", "GITHUB_EVENT_NAME"):
+    for k in (WAIVER_ENV, "GITHUB_REF_TYPE", "GITHUB_EVENT_NAME", "GITHUB_ACTIONS", "GITHUB_STEP_SUMMARY"):
         env.pop(k, None)
     env.update(env_extra)
     p = subprocess.run(
@@ -230,10 +230,12 @@ def test_cli_rejects_unknown_profile():
 
 
 def test_ci_workflow_waiver_is_structured_and_ci_only():
-    """The waiver CI sets must parse, and only next to ``--profile ci``.
+    """The waiver CI sets must parse, sit in a step's own env, and only next to ``--profile ci``.
 
     Checked against its own expiry day, so the date rotation the waiver forces
     does not break this test; an expired waiver turns the CI step itself red.
+    R40: a step may run the gate in the release profile (job sqlite-fixed),
+    but then without a waiver; a job- or workflow-level waiver is refused.
     """
     import os
     import re
@@ -244,8 +246,16 @@ def test_ci_workflow_waiver_is_structured_and_ci_only():
     text = open(path, encoding="utf-8").read()
     values = re.findall(r'^\s*%s:\s*"([^"]*)"\s*$' % WAIVER_ENV, text, re.MULTILINE)
     assert values, "CI no longer sets a waiver: drop this test with it"
-    gates = re.findall(r"python -m safeforge\.sqlite_gate[^\n]*", text)
-    assert gates and all("--profile ci" in g for g in gates)
+    steps = re.split(r"^      - ", text, flags=re.MULTILINE)[1:]
+    gate_steps = [st for st in steps if "python -m safeforge.sqlite_gate" in st]
+    assert sum(st.count(WAIVER_ENV) for st in steps) == text.count(WAIVER_ENV), "waiver outside a step's env"
+    for st in steps:
+        if WAIVER_ENV in st:
+            assert "python -m safeforge.sqlite_gate --profile ci" in st, st
+    assert any(WAIVER_ENV in st for st in gate_steps)
+    for st in gate_steps:
+        if "--profile ci" not in st:
+            assert WAIVER_ENV not in st, st
     for v in values:
         expires = re.search(r"expires=([0-9-]+)", v)
         assert expires, v

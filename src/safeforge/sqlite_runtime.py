@@ -32,21 +32,57 @@ branch builds (no tagged release); a vendor that backports the fix WITHOUT
 raising the version number is reported as not fixed (fail-closed, needs its own
 evidence and the documented waiver). The source id is reported, not matched.
 
-Release gate: ``python -m safeforge.sqlite_gate`` prints a JSON verdict and
-exits 0 (pass, or waived), 1 (affected library, no waiver) or 2 (blank waiver).
-The waiver is the environment variable ``SAFEFORGE_ALLOW_UNFIXED_SQLITE``; its
-value is the reason and is printed in the verdict.
+Release gate: ``python -m safeforge.sqlite_gate [--profile release|ci]`` prints
+a JSON verdict and exits 0 (pass, or waived), 1 (affected library, no waiver),
+2 (malformed, expired or too-long waiver) or 3 (waiver offered where none is
+allowed).
+
+SF-R39-01 (GPT-6 cross-family A2, 2026-10-28): the first gate accepted any
+non-blank value of ``SAFEFORGE_ALLOW_UNFIXED_SQLITE`` as a waiver, so a variable
+inherited from a runner, an organisation secret or a stale job definition was
+enough to pass a release. Now:
+
+* profile ``release`` (the default) never accepts a waiver: an affected library
+  fails, and a waiver offered for it is reported as forbidden (exit 3);
+* profile ``ci`` accepts only a structured, time-bound waiver
+  ``expires=YYYY-MM-DD; reason=<text>``: unknown or repeated keys, a blank
+  reason, a past expiry or an expiry more than ``MAX_WAIVER_DAYS`` ahead are
+  invalid (exit 2), so every waiver turns red again and must be re-decided;
+* a GitHub Actions run for a tag or a ``release`` event is a release whatever
+  profile was asked for (``GITHUB_REF_TYPE`` / ``GITHUB_EVENT_NAME``), so a
+  release job cannot opt out by passing ``--profile ci``.
+
+Who may write a ``ci`` waiver is decided by review of the file that sets it
+(the workflow), not by this module: there is no signature check, and an
+attacker who controls the release job's command line or environment is out of
+scope (they can skip the gate altogether).
 """
 
 from __future__ import annotations
 
+import datetime
 import re
 import sqlite3
 from collections.abc import Mapping
 
-__all__ = ["WAIVER_ENV", "loaded_sqlite_status", "release_gate", "sqlite_wal_reset_status"]
+__all__ = [
+    "MAX_WAIVER_DAYS",
+    "PROFILES",
+    "WAIVER_ENV",
+    "effective_profile",
+    "loaded_sqlite_status",
+    "parse_waiver",
+    "release_gate",
+    "sqlite_wal_reset_status",
+    "WaiverInvalid",
+]
 
 WAIVER_ENV = "SAFEFORGE_ALLOW_UNFIXED_SQLITE"
+PROFILES = ("release", "ci")
+# A waiver must come back for a new decision at least this often (SF-R39-01).
+MAX_WAIVER_DAYS = 120
+_WAIVER_KEYS = frozenset({"expires", "reason"})
+_DATE_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
 
 _FIXED_FROM = (3, 51, 3)
 _WITHDRAWN = frozenset({(3, 52, 0)})
@@ -104,15 +140,94 @@ def loaded_sqlite_status(conn=None) -> dict:
     return sqlite_wal_reset_status(tuple(int(x) for x in m.groups()), str(source_id))
 
 
-def release_gate(status: Mapping, env: Mapping[str, str]) -> dict:
-    """Verdict for a release: only an exactly-True ``fixed`` passes without a waiver."""
+class WaiverInvalid(ValueError):
+    """A waiver that does not have the form ``expires=YYYY-MM-DD; reason=<text>``."""
+
+
+def parse_waiver(raw: str, today: datetime.date) -> dict:
+    """Parse ``expires=YYYY-MM-DD; reason=<text>`` (keys in any order, each exactly once).
+
+    Raises :class:`WaiverInvalid` for a malformed, expired or too-long waiver.
+    The waiver is valid up to and including its ``expires`` day (UTC).
+    """
+    if type(raw) is not str:
+        raise WaiverInvalid("waiver must be str")
+    if type(today) is not datetime.date:
+        raise TypeError("today must be a datetime.date")
+    fields: dict[str, str] = {}
+    for part in raw.split(";"):
+        if not part.strip():
+            continue
+        key, sep, value = part.partition("=")
+        key = key.strip()
+        if not sep or key not in _WAIVER_KEYS:
+            raise WaiverInvalid("unknown waiver field %r (expected expires=YYYY-MM-DD; reason=<text>)" % key)
+        if key in fields:
+            raise WaiverInvalid("waiver field %r given twice" % key)
+        fields[key] = value.strip()
+    if set(fields) != _WAIVER_KEYS:
+        raise WaiverInvalid("waiver needs expires=YYYY-MM-DD and reason=<text>")
+    if not fields["reason"]:
+        raise WaiverInvalid("waiver reason is blank")
+    if not _DATE_RE.match(fields["expires"]):
+        raise WaiverInvalid("waiver expires must be YYYY-MM-DD")
+    try:
+        expires = datetime.date.fromisoformat(fields["expires"])
+    except ValueError as e:
+        raise WaiverInvalid("waiver expires is not a date: %s" % e) from None
+    if expires < today:
+        raise WaiverInvalid("waiver expired on %s" % expires.isoformat())
+    if (expires - today).days > MAX_WAIVER_DAYS:
+        raise WaiverInvalid("waiver expires more than %d days ahead" % MAX_WAIVER_DAYS)
+    return {"expires": expires.isoformat(), "reason": fields["reason"]}
+
+
+def effective_profile(requested: str, env: Mapping[str, str]) -> tuple[str, str]:
+    """The profile the gate applies, and why. A GitHub tag or release run is always ``release``."""
+    if type(requested) is not str or requested not in PROFILES:
+        raise ValueError("profile must be one of %s" % ", ".join(PROFILES))
+    if env.get("GITHUB_REF_TYPE") == "tag":
+        return "release", "GITHUB_REF_TYPE=tag"
+    if env.get("GITHUB_EVENT_NAME") == "release":
+        return "release", "GITHUB_EVENT_NAME=release"
+    return requested, "requested"
+
+
+def release_gate(
+    status: Mapping,
+    env: Mapping[str, str],
+    *,
+    profile: str = "release",
+    today: datetime.date | None = None,
+) -> dict:
+    """Verdict for a release: only an exactly-True ``fixed`` passes without a waiver.
+
+    ``profile="release"`` (default) accepts no waiver; ``profile="ci"`` accepts a
+    structured, unexpired waiver (:func:`parse_waiver`). See the module docstring.
+    """
+    applied, why = effective_profile(profile, env)
+    if today is None:
+        today = datetime.datetime.now(datetime.UTC).date()
     raw = env.get(WAIVER_ENV)
-    reason = raw.strip() if raw is not None else None
-    result = {"gate": "sqlite-wal-reset", "sqlite": dict(status), "waiver_env": WAIVER_ENV, "waiver_reason": reason}
+    offered = raw is not None
+    result = {
+        "gate": "sqlite-wal-reset",
+        "sqlite": dict(status),
+        "profile": applied,
+        "profile_source": why,
+        "waiver_env": WAIVER_ENV,
+        "waiver_offered": offered,
+        "waiver": None,
+        "waiver_error": None,
+    }
     if status.get("fixed") is True:
         return {**result, "verdict": "pass", "exit_code": 0}
-    if raw is None:
+    if not offered:
         return {**result, "verdict": "fail", "exit_code": 1}
-    if not reason:
-        return {**result, "verdict": "invalid-waiver", "exit_code": 2}
-    return {**result, "verdict": "waived", "exit_code": 0}
+    if applied == "release":
+        return {**result, "verdict": "waiver-forbidden", "exit_code": 3, "waiver_error": "no waiver in a release"}
+    try:
+        waiver = parse_waiver(raw, today)
+    except WaiverInvalid as e:
+        return {**result, "verdict": "invalid-waiver", "exit_code": 2, "waiver_error": str(e)}
+    return {**result, "verdict": "waived", "exit_code": 0, "waiver": waiver}

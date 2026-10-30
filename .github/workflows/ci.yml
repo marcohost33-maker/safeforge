@@ -50,11 +50,13 @@ jobs:
       - run: python -c "import sqlite3, sys; print(sys.version, sqlite3.sqlite_version)"
       # SQLite WAL-reset release gate (README). It runs here so the log records
       # every runner's real library; the waiver below is NOT a release
-      # decision. A release run executes the gate without it.
-      - run: python -m safeforge.sqlite_gate
+      # decision. SF-R39-01: only --profile ci takes a waiver, it must carry an
+      # end date (at most 120 days ahead) and turns this step red when it
+      # expires; a release run uses the default profile, which takes none.
+      - run: python -m safeforge.sqlite_gate --profile ci
         env:
           PYTHONPATH: src
-          SAFEFORGE_ALLOW_UNFIXED_SQLITE: "PR/main CI is not a release; runtime blocking is owner decision E2 (I1026-07)"
+          SAFEFORGE_ALLOW_UNFIXED_SQLITE: "expires=2027-01-31; reason=PR/main CI is not a release, runtime blocking is owner decision E2 (I1026-07)"
       - run: python -m pytest -p no:cacheprovider
 
   # Power cut, data half: LazyFS drops every unsynced byte (tests/lazyfs_harness.py).

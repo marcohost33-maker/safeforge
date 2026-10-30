@@ -4,10 +4,12 @@
    no-waiver pass had never run against a REAL SQLite with the WAL-reset fix:
    every CI runner links 3.45.1 / 3.49.1 / 3.50.4 (measured in run
    40984016099), and tests/conftest.py pins "fixed" for all other tests. CI job
-   ``sqlite-fixed`` builds 3.54.1 from the official mirror and sets
-   ``SAFEFORGE_EXPECT_FIXED_SQLITE=<version>``; then the ``required_*`` tests
-   below must pass against that library, and a wrong library fails them --
-   they never skip once the variable is set.
+   ``sqlite-real`` builds pinned libraries from the official mirror (R41: the
+   boundary matrix 3.54.1, 3.51.3, 3.51.2, 3.50.7, 3.44.6) and sets
+   ``SAFEFORGE_EXPECT_SQLITE=<version>`` and ``SAFEFORGE_EXPECT_SQLITE_FIXED``
+   (``true``/``false``); then the ``required_*`` tests below must pass against
+   that library, and a wrong library fails them -- they never skip once the
+   variable is set.
 2. ``source_canonical`` marks a modified (e.g. distribution-patched) build:
    ubuntu-latest reports ``...82257ccalt1``.
 3. A CI waiver expires by design; the CLI now warns ``WAIVER_WARN_DAYS``
@@ -26,7 +28,7 @@ import sys
 
 import pytest
 
-from safeforge import ObjectStore
+from safeforge import ObjectStore, WalResetBugUnfixed
 from safeforge.sqlite_gate import summary_markdown
 from safeforge.sqlite_runtime import (
     WAIVER_ENV,
@@ -41,9 +43,10 @@ from .conftest import REPO, child_env
 CANONICAL = "2026-10-16 14:45:20 " + "57520227c95396ce39ba6ecaac8d475b78dd3964" + "0" * 24
 UBUNTU_NOBLE = "2024-01-30 16:01:20 e876e51a0ed5c5b3126f52e532044363a014bc594cfefa87ffb5b82257ccalt1"
 TODAY = datetime.date(2026, 10, 30)
-EXPECT_FIXED = os.environ.get("SAFEFORGE_EXPECT_FIXED_SQLITE")
-# Optional second pin: the exact sqlite_source_id() of the build (its Fossil check-in).
-EXPECT_SOURCE_ID = os.environ.get("SAFEFORGE_EXPECT_FIXED_SQLITE_SOURCE_ID")
+EXPECT_VERSION = os.environ.get("SAFEFORGE_EXPECT_SQLITE")
+# Exact sqlite_source_id() of the build (its Fossil check-in), and whether it carries the fix.
+EXPECT_SOURCE_ID = os.environ.get("SAFEFORGE_EXPECT_SQLITE_SOURCE_ID")
+EXPECT_FIXED_RAW = os.environ.get("SAFEFORGE_EXPECT_SQLITE_FIXED")
 
 
 # -- source_canonical -----------------------------------------------------------
@@ -170,38 +173,60 @@ def test_cli_unwritable_summary_does_not_change_the_verdict(tmp_path):
 
 # -- real library with the fix (CI job sqlite-fixed) --------------------------------
 
-requires_fixed = pytest.mark.skipif(
-    not EXPECT_FIXED, reason="set SAFEFORGE_EXPECT_FIXED_SQLITE=<version> (CI job sqlite-fixed) to run"
-)
+requires_real = pytest.mark.skipif(not EXPECT_VERSION, reason="set SAFEFORGE_EXPECT_SQLITE=<version> (CI job sqlite-real) to run")
+
+
+def _expect_fixed() -> bool:
+    assert EXPECT_FIXED_RAW in ("true", "false"), "SAFEFORGE_EXPECT_SQLITE_FIXED must be true or false"
+    return EXPECT_FIXED_RAW == "true"
 
 
 @pytest.mark.real_sqlite
-@requires_fixed
-def test_required_loaded_library_is_the_expected_fixed_build():
+@requires_real
+def test_required_loaded_library_is_the_expected_build():
     st = loaded_sqlite_status()
-    assert st["version"] == EXPECT_FIXED, st
-    assert st["fixed"] is True, st
+    assert st["version"] == EXPECT_VERSION, st
+    assert st["fixed"] is _expect_fixed(), st
     assert st["source_canonical"] is True, st
     if EXPECT_SOURCE_ID is not None:
         assert st["source_id"] == EXPECT_SOURCE_ID, st
 
 
 @pytest.mark.real_sqlite
-@requires_fixed
-def test_required_release_gate_passes_without_waiver():
+@requires_real
+def test_required_release_gate_follows_the_library():
+    fixed = _expect_fixed()
     p = _cli({})
     out = json.loads(p.stdout)
-    assert (p.returncode, out["verdict"], out["profile"], out["waiver_offered"]) == (0, "pass", "release", False)
-    assert out["sqlite"]["version"] == EXPECT_FIXED
+    assert out["sqlite"]["version"] == EXPECT_VERSION
+    assert (p.returncode, out["verdict"], out["profile"]) == ((0, "pass", "release") if fixed else (1, "fail", "release"))
+    p = _cli({WAIVER_ENV: "inherited"})
+    assert (p.returncode, json.loads(p.stdout)["verdict"]) == ((0, "pass") if fixed else (3, "waiver-forbidden"))
+    p = _cli({WAIVER_ENV: _soon(30)}, "--profile", "ci")
+    assert (p.returncode, json.loads(p.stdout)["verdict"]) == ((0, "pass") if fixed else (0, "waived"))
 
 
 @pytest.mark.real_sqlite
-@requires_fixed
+@requires_real
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the job builds the library on Linux")
-def test_required_durability_flag_is_true_on_the_real_fixed_library(tmp_path):
-    # Assertion first: on a wrong library this fails as an assertion, not as WalResetBugUnfixed.
-    assert loaded_sqlite_status()["fixed"] is True
-    with ObjectStore(str(tmp_path / "root"), require_wal_reset_fix=True) as s:
-        r = s.ingest(io.BytesIO(b"real fixed library"), max_bytes=1 << 20)
-    assert (r.sqlite_version, r.sqlite_wal_reset_fixed) == (EXPECT_FIXED, True)
-    assert r.durability_prerequisites_ok is True, r
+def test_required_durability_flag_follows_the_library(tmp_path):
+    fixed = _expect_fixed()
+    # Assertion first: on a wrong library this fails as an assertion, not inside the store.
+    assert loaded_sqlite_status()["fixed"] is fixed
+    with ObjectStore(str(tmp_path / "root")) as s:
+        r = s.ingest(io.BytesIO(b"real library"), max_bytes=1 << 20)
+    assert (r.sqlite_version, r.sqlite_wal_reset_fixed, r.filesystem_class) == (EXPECT_VERSION, fixed, "local")
+    assert r.durability_prerequisites_ok is fixed, r
+
+
+@pytest.mark.real_sqlite
+@requires_real
+def test_required_require_fix_refuses_exactly_the_affected_library(tmp_path):
+    root = tmp_path / "root"
+    if _expect_fixed():
+        with ObjectStore(str(root), require_wal_reset_fix=True) as s:
+            assert s.sqlite_runtime["fixed"] is True
+    else:
+        with pytest.raises(WalResetBugUnfixed):
+            ObjectStore(str(root), require_wal_reset_fix=True)
+        assert not root.exists()  # refused before anything was created

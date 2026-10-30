@@ -18,9 +18,11 @@ whenever a service accepts uploads and keeps metadata in SQLite:
 
 Standard library only (Python ≥ 3.12). Apache-2.0.
 
-**Maturity: research prototype, v0.1.0.** The test suite passes locally on
-Windows with Python 3.12 and 3.14. The Linux paths (directory fsync, `EXDEV`,
-POSIX rename) run only in CI. Nothing here has been audited externally.
+**Maturity: research prototype, v0.1.0.** CI runs the suite on Ubuntu,
+Windows and macOS with Python 3.12 and 3.13, a LazyFS power-cut job, and one
+job against SQLite 3.54.1 built from source (the only library in CI with the
+WAL-reset fix). Each round was reviewed across model families (see
+CHANGELOG); nothing here has been audited externally, and there is no release.
 
 ## What this does **not** claim
 
@@ -65,8 +67,10 @@ POSIX rename) run only in CI. Nothing here has been audited externally.
   backports 3.44.6 and 3.50.7 (3.52.0 was withdrawn). One `ObjectStore` per
   thread on the same database, coordinated stores in several processes and
   `coordination.event_writer` next to a store all meet the precondition.
-  python.org builds of Python 3.12 (SQLite 3.49.1) and 3.13/3.14 (3.50.4) are
-  affected. The check reads the library actually loaded (`sqlite_version()`
+  Measured in CI on 2026-10-30 (run 40984016099), every runner library is
+  affected: python.org 3.12.10 bundles 3.49.1 and 3.13.16 bundles 3.50.4
+  (Windows, macOS); Ubuntu 24.04's system 3.45.1 is a distribution-patched
+  build (`sqlite_source_id()` ends in `alt1`). The check reads the library actually loaded (`sqlite_version()`
   and `sqlite_source_id()` from a live connection), not the Python version:
   - `ObjectStore.sqlite_runtime` reports it for the store's own connection;
   - `connect(..., require_wal_reset_fix=True)` / `ObjectStore(...,
@@ -84,8 +88,12 @@ POSIX rename) run only in CI. Nothing here has been audited externally.
     at most 120 days ahead; a free-text, malformed or expired waiver exits 2,
     so every CI waiver comes back for a new decision (SF-R39-01). Who may
     write one is decided by review of the workflow file; there is no
-    signature check. The decision is by version number: a vendor backport
-    without a version bump is reported as affected.
+    signature check. From 21 days before a CI waiver expires the gate warns
+    on stderr and in the GitHub job summary. Exit 2 is also argparse's code
+    for a bad command line; the JSON verdict on stdout tells them apart (no
+    JSON = usage error). The decision is by version number: a vendor backport
+    without a version bump is reported as affected; `source_canonical: false`
+    marks the modified builds where that can happen.
 - **macOS needs F_FULLFSYNC.** Apple's fsync(2) flushes to the drive, not
   through its cache, and CPython's `os.fsync` does not issue `F_FULLFSYNC`.
   `durable` issues it (falling back to fsync with status

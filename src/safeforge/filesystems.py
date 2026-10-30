@@ -33,7 +33,9 @@ Sources per platform: Linux ``/proc/self/mountinfo`` (field 9 fstype, field 6
 mount options, last field super options; proc_pid_mountinfo(5)), parsed by
 :func:`safeforge.mounts.parse_mountinfo_filesystems`. macOS ``statfs(2)``
 (``f_fstypename``, ``MNT_LOCAL``) through ctypes, accepted only if the reported
-mount point is a prefix of the path. Windows ``GetVolumePathNameW`` +
+mount point is on the same device as the path -- not a path prefix: firmlinks
+put /private/var and /Users on /System/Volumes/Data (CI macos-latest, R41).
+Windows ``GetVolumePathNameW`` +
 ``GetDriveTypeW`` (DRIVE_REMOTE, DRIVE_RAMDISK) + ``GetVolumeInformationW``.
 
 Limits: a RAM disk formatted with a disk filesystem (macOS ``hdiutil`` ram://,
@@ -44,6 +46,7 @@ visible here (README "No power-loss proof").
 from __future__ import annotations
 
 import os
+import posixpath
 import sys
 from collections.abc import Callable, Iterable
 
@@ -129,7 +132,7 @@ def classify_linux(path: str, table: dict | None, *, exists: Callable[[str], boo
             # e.g. a container root: the host's upperdir is not in this namespace.
             return _info("overlay", "unknown", "mountinfo", overlay="upperdir-not-visible")
         seen.add(point)
-        current = os.path.normpath(upper)
+        current = posixpath.normpath(upper)  # a Linux path on every host (pure tests run on Windows too)
     return _info("overlay", "unknown", "mountinfo", overlay="too-deep")
 
 
@@ -168,26 +171,23 @@ def _darwin(path: str) -> dict:
             return _info("", "unknown", "statfs-failed")
         fstype = buf.f_fstypename.decode("ascii")
         on = os.fsdecode(buf.f_mntonname)
+        same_device = os.stat(on).st_dev == os.stat(path).st_dev
     except (OSError, UnicodeDecodeError, AttributeError, ValueError):
         return _info("", "unknown", "statfs-failed")
-    return classify_darwin(path, fstype, on, buf.f_flags)
+    return classify_darwin(fstype, buf.f_flags, same_device)
 
 
 MNT_LOCAL = 0x00001000
 
 
-def classify_darwin(path: str, fstype: str, mounted_on: str, flags: int) -> dict:
-    """Class from ``statfs`` fields. Pure. A mount point that does not contain ``path``
-    means the struct was misread: unknown, not a guess."""
-    if not fstype or not fstype.isascii() or not (mounted_on == "/" or _covers(mounted_on, path)):
+def classify_darwin(fstype: str, flags: int, same_device: bool) -> dict:
+    """Class from ``statfs`` fields. Pure. ``same_device``: the reported mount point
+    and the path share ``st_dev`` -- if not, the struct was misread: unknown, not a guess."""
+    if not fstype or not fstype.isascii() or same_device is not True:
         return _info(fstype if fstype.isascii() else "", "unknown", "statfs-inconsistent")
     if not flags & MNT_LOCAL:
         return _info(fstype, "network", "statfs")
     return _info(fstype, _type_class(fstype), "statfs")
-
-
-def _covers(outer: str, inner: str) -> bool:
-    return inner == outer or inner.startswith(outer.rstrip("/") + "/")
 
 
 DRIVE_REMOTE = 4

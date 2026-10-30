@@ -157,23 +157,34 @@ def test_unknown_platform_is_unknown():
 # -- macOS / Windows (pure) ------------------------------------------------------------
 
 
-DATA = "/System/Volumes/Data/private/var/x"
-
-
 @pytest.mark.parametrize(
-    "path, fstype, on, flags, cls",
+    "fstype, flags, same_device, cls",
     [
-        (DATA, "apfs", "/System/Volumes/Data", filesystems.MNT_LOCAL, "local"),
-        ("/private/x", "apfs", "/", filesystems.MNT_LOCAL, "local"),
-        ("/Volumes/share/x", "smbfs", "/Volumes/share", 0, "network"),
-        ("/Volumes/nfs/x", "nfs", "/Volumes/nfs", 0, "network"),
-        (DATA, "apfs", "/System/Volumes/Data", 0, "network"),  # MNT_LOCAL decides, not the name
-        (DATA, "apfs", "/Volumes/Other", filesystems.MNT_LOCAL, "unknown"),  # misread struct: path not under it
-        (DATA, "", "/System/Volumes/Data", filesystems.MNT_LOCAL, "unknown"),
+        ("apfs", filesystems.MNT_LOCAL, True, "local"),
+        ("smbfs", 0, True, "network"),
+        ("nfs", 0, True, "network"),
+        ("apfs", 0, True, "network"),  # MNT_LOCAL decides, not the name
+        ("apfs", filesystems.MNT_LOCAL, False, "unknown"),  # misread struct: mount point on another device
+        ("", filesystems.MNT_LOCAL, True, "unknown"),
+        ("apfs", filesystems.MNT_LOCAL, 1, "unknown"),  # exact bool only
     ],
 )
-def test_darwin_statfs_fields(path, fstype, on, flags, cls):
-    assert classify_darwin(path, fstype, on, flags)["class"] == cls
+def test_darwin_statfs_fields(fstype, flags, same_device, cls):
+    assert classify_darwin(fstype, flags, same_device)["class"] == cls
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="real statfs(2) on macOS")
+def test_real_darwin_tmp_is_local_apfs_through_the_firmlink(tmp_path):
+    # tmp_path is under /private/var, statfs names /System/Volumes/Data (firmlink): same device.
+    info = filesystems.filesystems([str(tmp_path)])[str(tmp_path)]
+    assert (info["class"], info["source"]) == ("local", "statfs"), info
+    assert info["fstype"] == "apfs", info
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="real volume information on Windows")
+def test_real_windows_volume_is_local(tmp_path):
+    info = filesystems.filesystems([str(tmp_path)])[str(tmp_path)]
+    assert (info["class"], info["source"]) == ("local", "volume-info"), info
 
 
 @pytest.mark.parametrize(

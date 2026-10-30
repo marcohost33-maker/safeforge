@@ -30,8 +30,13 @@ integration gate".
   the path), Windows `GetDriveTypeW`/`GetVolumeInformationW`. The flag now
   needs `filesystem_class == "local"`; `IngestResult.filesystem_class` and
   `ObjectStore.layout_filesystems` report it. Open and ingest are unchanged.
-  Regression on the real `/dev/shm`; 15/15 mutants of the new guards killed
-  by assertion. **Behaviour change:** a store inside a container's writable
+  Regression on the real `/dev/shm`; 16/16 mutants of the new guards killed
+  by assertion. First CI run red on macOS and Windows, both fixed: macOS
+  firmlinks (/private/var, /Users -> /System/Volumes/Data) defeat a mount-point
+  prefix check, so `statfs` is now accepted when the mount point and the path
+  share `st_dev`; the pure Linux tests normalised `upperdir` with the host's
+  `os.path` (backslashes on Windows) -- now `posixpath`. Real-statfs and
+  real-volume tests added for macOS and Windows. **Behaviour change:** a store inside a container's writable
   layer (root overlay) reports `unknown` and no longer claims durability --
   mount a volume.
 - **SQLite boundary matrix (CI job `sqlite-real`)**: 3.51.2 (last affected),

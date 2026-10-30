@@ -32,6 +32,15 @@ branch builds (no tagged release); a vendor that backports the fix WITHOUT
 raising the version number is reported as not fixed (fail-closed, needs its own
 evidence and the documented waiver). The source id is reported, not matched.
 
+R40 (2026-10-30): ``source_canonical`` says whether ``sqlite_source_id()`` has
+the form of an unmodified check-in, "YYYY-MM-DD HH:MM:SS <64 hex>"; sqlite.org
+(c3ref/c_source_id.html): "If the source code has been edited in any way since
+it was last checked in, then the last four hexadecimal digits of the hash may be
+modified." Measured on GitHub's ubuntu-latest (libsqlite3 3.45.1, 2026-10-30):
+``...82257ccalt1`` -- a distribution-patched build. Only such a build can carry
+a backport without a version bump, so the flag tells an operator where the
+version-number decision may be too strict. It never changes the decision.
+
 Release gate: ``python -m safeforge.sqlite_gate [--profile release|ci]`` prints
 a JSON verdict and exits 0 (pass, or waived), 1 (affected library, no waiver),
 2 (malformed, expired or too-long waiver) or 3 (waiver offered where none is
@@ -69,6 +78,7 @@ __all__ = [
     "MAX_WAIVER_DAYS",
     "PROFILES",
     "WAIVER_ENV",
+    "WAIVER_WARN_DAYS",
     "effective_profile",
     "loaded_sqlite_status",
     "parse_waiver",
@@ -81,6 +91,8 @@ WAIVER_ENV = "SAFEFORGE_ALLOW_UNFIXED_SQLITE"
 PROFILES = ("release", "ci")
 # A waiver must come back for a new decision at least this often (SF-R39-01).
 MAX_WAIVER_DAYS = 120
+# The CLI warns this many days before a waiver expires and turns its CI step red (R40).
+WAIVER_WARN_DAYS = 21
 _WAIVER_KEYS = frozenset({"expires", "reason"})
 _DATE_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
 
@@ -89,6 +101,7 @@ _WITHDRAWN = frozenset({(3, 52, 0)})
 # (first fixed, end of that line) -- branch backports named by sqlite.org/wal.html section 11.
 _BACKPORTS = (((3, 44, 6), (3, 45, 0)), ((3, 50, 7), (3, 51, 0)))
 _VERSION_RE = re.compile(r"^([0-9]+)\.([0-9]+)\.([0-9]+)$")
+_SOURCE_ID_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} [0-9a-f]{64}$")
 
 
 def sqlite_wal_reset_status(version_info: tuple[int, int, int], source_id: str) -> dict:
@@ -112,7 +125,13 @@ def sqlite_wal_reset_status(version_info: tuple[int, int, int], source_id: str) 
         fixed, reason = True, "branch backport 3.44.6/3.50.7 (sqlite.org/wal.html section 11; no tagged release)"
     else:
         fixed, reason = False, "affected: 3.7.0 through 3.51.2 carry the WAL-reset bug (sqlite.org/wal.html section 11)"
-    return {"fixed": fixed, "version": "%d.%d.%d" % v, "source_id": source_id, "reason": reason}
+    return {
+        "fixed": fixed,
+        "version": "%d.%d.%d" % v,
+        "source_id": source_id,
+        "source_canonical": _SOURCE_ID_RE.match(source_id) is not None,
+        "reason": reason,
+    }
 
 
 def loaded_sqlite_status(conn=None) -> dict:
@@ -135,6 +154,7 @@ def loaded_sqlite_status(conn=None) -> dict:
             "fixed": False,
             "version": str(version),
             "source_id": str(source_id),
+            "source_canonical": type(source_id) is str and _SOURCE_ID_RE.match(source_id) is not None,
             "reason": "unparseable sqlite_version(); not accepted",
         }
     return sqlite_wal_reset_status(tuple(int(x) for x in m.groups()), str(source_id))
@@ -230,4 +250,5 @@ def release_gate(
         waiver = parse_waiver(raw, today)
     except WaiverInvalid as e:
         return {**result, "verdict": "invalid-waiver", "exit_code": 2, "waiver_error": str(e)}
-    return {**result, "verdict": "waived", "exit_code": 0, "waiver": waiver}
+    days_left = (datetime.date.fromisoformat(waiver["expires"]) - today).days
+    return {**result, "verdict": "waived", "exit_code": 0, "waiver": {**waiver, "days_left": days_left}}

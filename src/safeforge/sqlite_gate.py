@@ -78,7 +78,7 @@ def _write_step_summary(result: dict, env) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m safeforge.sqlite_gate", description=__doc__.splitlines()[0])
-    parser.add_argument("--profile", choices=PROFILES, default="release")
+    parser.add_argument("--profile", choices=PROFILES, default=None, help="default: release (no waiver)")
     args = parser.parse_args(argv)
     result = release_gate(loaded_sqlite_status(), os.environ, profile=args.profile)
     print(json.dumps(result, sort_keys=True))

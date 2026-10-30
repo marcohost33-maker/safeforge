@@ -161,7 +161,16 @@ def test_non_release_context_keeps_ci_profile_positive_control(ctx):
     assert effective_profile("ci", ctx) == ("ci", "requested")
 
 
-@pytest.mark.parametrize("bad", ["", "CI", "prod", None, b"ci"])
+def test_no_profile_is_release_reported_as_default():
+    # R40: a verdict must not claim a request nobody made.
+    assert effective_profile(None, {}) == ("release", "default")
+    assert effective_profile(None, {"GITHUB_REF_TYPE": "tag"}) == ("release", "GITHUB_REF_TYPE=tag")
+    r = _gate(UNFIXED, {WAIVER_ENV: GOOD})
+    assert (r["profile"], r["profile_source"], r["exit_code"]) == ("release", "default", 3)
+    assert _gate(UNFIXED, {}, profile="release")["profile_source"] == "requested"
+
+
+@pytest.mark.parametrize("bad", ["", "CI", "prod", b"ci", 0])
 def test_unknown_profile_is_refused(bad):
     with pytest.raises(ValueError, match="profile must be one of"):
         release_gate(FIXED, {}, profile=bad)
@@ -194,6 +203,7 @@ def _valid_waiver() -> str:
 
 def test_cli_inherited_free_text_waiver_does_not_pass_a_release():
     rc, out = _cli({WAIVER_ENV: "inherited"})
+    assert (out["profile"], out["profile_source"]) == ("release", "default")
     if loaded_sqlite_status()["fixed"]:
         assert (rc, out["verdict"]) == (0, "pass")
     else:

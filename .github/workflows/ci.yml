@@ -89,6 +89,7 @@ jobs:
         env:
           LD_LIBRARY_PATH: ${{ runner.temp }}/sqlite-build/lib
           SAFEFORGE_EXPECT_FIXED_SQLITE: "3.54.1"
+          SAFEFORGE_EXPECT_FIXED_SQLITE_SOURCE_ID: "2026-10-16 14:45:20 555e07ef33f69a0957d24d8e555b702464a131d6f1607f4c3c1e4551e8e6ca76"
 
   # Power cut, data half: LazyFS drops every unsynced byte (tests/lazyfs_harness.py).
   # REQUIRED=1 turns a broken FUSE/LazyFS setup into a failure instead of a skip.

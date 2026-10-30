@@ -42,6 +42,8 @@ CANONICAL = "2026-10-16 14:45:20 " + "57520227c95396ce39ba6ecaac8d475b78dd3964" 
 UBUNTU_NOBLE = "2024-01-30 16:01:20 e876e51a0ed5c5b3126f52e532044363a014bc594cfefa87ffb5b82257ccalt1"
 TODAY = datetime.date(2026, 10, 30)
 EXPECT_FIXED = os.environ.get("SAFEFORGE_EXPECT_FIXED_SQLITE")
+# Optional second pin: the exact sqlite_source_id() of the build (its Fossil check-in).
+EXPECT_SOURCE_ID = os.environ.get("SAFEFORGE_EXPECT_FIXED_SQLITE_SOURCE_ID")
 
 
 # -- source_canonical -----------------------------------------------------------
@@ -180,6 +182,8 @@ def test_required_loaded_library_is_the_expected_fixed_build():
     assert st["version"] == EXPECT_FIXED, st
     assert st["fixed"] is True, st
     assert st["source_canonical"] is True, st
+    if EXPECT_SOURCE_ID is not None:
+        assert st["source_id"] == EXPECT_SOURCE_ID, st
 
 
 @pytest.mark.real_sqlite

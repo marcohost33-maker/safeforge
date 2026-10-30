@@ -15,11 +15,16 @@
 # Source: the official GitHub mirror of SQLite, pinned to the commit tagged
 # version-3.54.1 (git ls-remote https://github.com/sqlite/sqlite, 2026-10-30).
 # A git commit id names the whole tree, so the pin is the integrity check.
+# Second anchor: the tree's manifest.uuid is SQLite's own (Fossil) check-in id,
+# which the built library reports in sqlite_source_id(); CI pins that string in
+# SAFEFORGE_EXPECT_FIXED_SQLITE_SOURCE_ID, so the tests prove that THIS build
+# was loaded, not just some 3.54.1.
 # Needs: git, a C compiler, make, tclsh (Ubuntu: tcl) for the amalgamation.
 set -eu
 
 SQLITE_SHA=57520227c95396ce39ba6ecaac8d475b78dd3964   # sqlite/sqlite tag version-3.54.1
 SQLITE_VERSION=3.54.1
+SQLITE_CHECKIN=555e07ef33f69a0957d24d8e555b702464a131d6f1607f4c3c1e4551e8e6ca76   # manifest.uuid of that tree
 
 work=${1:?usage: build_sqlite.sh <workdir>}
 mkdir -p "$work"
@@ -33,6 +38,7 @@ git -C src fetch -q --depth 1 origin "$SQLITE_SHA"
 git -C src checkout -q --detach FETCH_HEAD
 test "$(git -C src rev-parse HEAD)" = "$SQLITE_SHA"
 test "$(cat src/VERSION)" = "$SQLITE_VERSION"
+test "$(cat src/manifest.uuid)" = "$SQLITE_CHECKIN"
 
 mkdir -p build lib
 cd build
@@ -48,4 +54,5 @@ ${CC:-cc} -O2 -fPIC -shared -Wl,-soname,libsqlite3.so.0 \
     sqlite3.c -o ../lib/libsqlite3.so.0 -lm -ldl -lpthread
 cd ..
 grep -q "#define SQLITE_VERSION *\"$SQLITE_VERSION\"" build/sqlite3.h
-echo "built $(pwd)/lib/libsqlite3.so.0 (SQLite $SQLITE_VERSION, $SQLITE_SHA)"
+grep -q "#define SQLITE_SOURCE_ID *\"[0-9: -]* $SQLITE_CHECKIN\"" build/sqlite3.h
+echo "built $(pwd)/lib/libsqlite3.so.0 (SQLite $SQLITE_VERSION, git $SQLITE_SHA, check-in $SQLITE_CHECKIN)"

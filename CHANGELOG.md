@@ -38,7 +38,21 @@ Critical review of R39 against primary data (CI logs of run 40984016099).
 - **Workflow lint widened**: a waiver must sit in a step's own `env` next to
   `--profile ci`; a release-profile gate step must carry none; a job- or
   workflow-level waiver fails the test (3 mutated workflows, all caught).
-- Mutation probe of the R40 guards: 8/8 killed by assertion.
+- **Measured in CI (job sqlite-fixed, run 40987503949, first execution)**:
+  py3.13.17 loaded SQLite 3.54.1; the gate without `--profile` and without a
+  waiver gave `pass`, exit 0, `source_canonical: true`; 588 passed, 24 skipped,
+  none of the `test_required_*` skipped.
+- **Second integrity anchor**: the tree's `manifest.uuid` is SQLite's Fossil
+  check-in id (`555e07ef…ca76` for 3.54.1); the build script checks it against
+  the tree and the generated header, and CI pins the full
+  `sqlite_source_id()` in `SAFEFORGE_EXPECT_FIXED_SQLITE_SOURCE_ID`, so the
+  tests prove that this build was loaded, not just some 3.54.1. Not confirmed
+  from a source outside the tree (sqlite.org unreachable from the sandbox).
+- **`profile_source: "default"`** when no profile was given (was "requested",
+  found in the job log); `release_gate(profile=None)` and the CLI default are
+  still the release profile.
+- Mutation probe: R40 guards 8/8, R39 guards re-run 11/11 (default mutant
+  retargeted), workflow lint 3/3 -- all killed by assertion.
 - Corrections to the R39 report: the `main` run for 8ebfbab was cancelled by
   `cancel-in-progress` when b2cba6f was pushed (superseded, green);
   Codex reviewed #4 after the merge with no findings.

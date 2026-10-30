@@ -202,14 +202,20 @@ def parse_waiver(raw: str, today: datetime.date) -> dict:
     return {"expires": expires.isoformat(), "reason": fields["reason"]}
 
 
-def effective_profile(requested: str, env: Mapping[str, str]) -> tuple[str, str]:
-    """The profile the gate applies, and why. A GitHub tag or release run is always ``release``."""
-    if type(requested) is not str or requested not in PROFILES:
+def effective_profile(requested: str | None, env: Mapping[str, str]) -> tuple[str, str]:
+    """The profile the gate applies, and why. A GitHub tag or release run is always ``release``.
+
+    ``None`` means nobody chose one: ``release``, reported as ``"default"`` (R40)
+    so a verdict never claims a request that was not made.
+    """
+    if requested is not None and (type(requested) is not str or requested not in PROFILES):
         raise ValueError("profile must be one of %s" % ", ".join(PROFILES))
     if env.get("GITHUB_REF_TYPE") == "tag":
         return "release", "GITHUB_REF_TYPE=tag"
     if env.get("GITHUB_EVENT_NAME") == "release":
         return "release", "GITHUB_EVENT_NAME=release"
+    if requested is None:
+        return "release", "default"
     return requested, "requested"
 
 
@@ -217,12 +223,12 @@ def release_gate(
     status: Mapping,
     env: Mapping[str, str],
     *,
-    profile: str = "release",
+    profile: str | None = None,
     today: datetime.date | None = None,
 ) -> dict:
     """Verdict for a release: only an exactly-True ``fixed`` passes without a waiver.
 
-    ``profile="release"`` (default) accepts no waiver; ``profile="ci"`` accepts a
+    ``profile="release"`` (also the default, ``None``) accepts no waiver; ``profile="ci"`` accepts a
     structured, unexpired waiver (:func:`parse_waiver`). See the module docstring.
     """
     applied, why = effective_profile(profile, env)

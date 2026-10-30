@@ -40,12 +40,13 @@ import os
 import re
 import sqlite3
 import stat
+import sys
 import time
 import uuid
 from dataclasses import dataclass, field
 from typing import BinaryIO
 
-from . import _faults, db, durable
+from . import _faults, db, durable, mounts, sqlite_runtime
 
 __all__ = [
     "ObjectStore",
@@ -57,6 +58,7 @@ __all__ = [
     "IngestInFlight",
     "IngestAborted",
     "IdempotencyConflict",
+    "LayoutNotDurable",
 ]
 
 _ID_RE = re.compile(r"^[0-9a-f]{32}$")
@@ -104,6 +106,19 @@ class IdempotencyConflict(IngestError):
     """The idempotency key was already used for different content."""
 
 
+class LayoutNotDurable(IngestError):
+    """A store directory's entry could not be fsync'ed in its parent; the store does not open.
+
+    SF-R25-01: an opened store can acknowledge ingests, so it must not exist
+    while root/, objects/ or staging/ may vanish in a power cut. ``layout_sync``
+    keeps every parent's status, the failed ones as ``"failed:<error>"``.
+    """
+
+    def __init__(self, message: str, layout_sync: dict[str, str]) -> None:
+        super().__init__(message)
+        self.layout_sync = dict(layout_sync)
+
+
 @dataclass(frozen=True)
 class IngestResult:
     object_id: str
@@ -112,6 +127,27 @@ class IngestResult:
     deduplicated: bool
     publish: str = ""
     dir_sync: str = ""
+    # SF-R27-01: the ACK above is logical (the database says stored). Whether it also survives a power
+    # cut is a separate claim. SF-R28-01: True only if EVERY software prerequisite was observed --
+    # the object file, objects/ and staging/ synced "ok"; the store's layout report (``layout_sync``,
+    # including the directory that holds the database) is non-empty and all "ok"; and the status
+    # COMMIT of THIS ingest ran under synchronous FULL/EXTRA in WAL mode (on macOS with fullfsync),
+    # read inside that transaction, not remembered from open. Anything not observed gives False;
+    # the logical ACK is never withdrawn for missing evidence. Windows ("unsupported:") and macOS
+    # without F_FULLFSYNC ("degraded:") stay False; a deduplicated result attests nothing about the
+    # earlier ingest. It reports prerequisites, not a hardware guarantee: drives or bridges that
+    # ignore flushes cannot be detected from software.
+    # SF-R35-01: and the SQLite library behind the store carries the WAL-reset fix
+    # (``ObjectStore.sqlite_runtime["fixed"] is True``); an affected library can lose committed
+    # frames when two connections write or checkpoint at once, whatever was synced.
+    file_sync: str = ""
+    staging_sync: str = ""
+    durability_prerequisites_ok: bool = False
+
+    @property
+    def powercut_durable(self) -> bool:
+        """Deprecated read-only alias of ``durability_prerequisites_ok`` (SF-R35, removed after one minor release)."""
+        return self.durability_prerequisites_ok
 
 
 @dataclass
@@ -190,11 +226,88 @@ def _file_matches(path: str, sha256: str, size: int) -> bool:
                 h.update(chunk)
             # Catch a path swap or in-place size mutation during hashing.
             opened, after = os.fstat(f.fileno()), os.lstat(path)
-            return (stat.S_ISREG(after.st_mode) and
-                    (opened.st_dev, opened.st_ino) == (after.st_dev, after.st_ino) and
-                    opened.st_size == size and h.hexdigest() == sha256)
+            return (
+                stat.S_ISREG(after.st_mode)
+                and (opened.st_dev, opened.st_ino) == (after.st_dev, after.st_ino)
+                and opened.st_size == size
+                and h.hexdigest() == sha256
+            )
     except (OSError, ValueError):
         return False
+
+
+def _missing_dirs(path: str) -> list[str]:
+    """``path`` and its ancestors that do not exist yet (what makedirs will create)."""
+    out = []
+    path = os.path.abspath(path)
+    while not os.path.lexists(path):
+        out.append(path)
+        parent = os.path.dirname(path)
+        if parent == path:
+            break
+        path = parent
+    return out
+
+
+def _kernel_entry(path: str) -> str:
+    """The directory entry the kernel opens for ``path``: its directory part
+    resolved like ``open()`` resolves it (symlinks before ``..``), its last
+    component unresolved. ``os.path.abspath`` is lexical and can name another
+    directory when a symlink precedes ``..`` (SF-R36-03)."""
+    head, tail = os.path.split(path)
+    return os.path.join(os.path.realpath(head or os.curdir), tail)
+
+
+def _same_mount_ancestors(path: str, mount_probe: mounts.MountProbe | None = None) -> tuple[list[str], str]:
+    """SF-R36-01: ``path`` and each ancestor whose parent is on the same mount.
+
+    An earlier open may have created any of these and crashed or failed before
+    their parents were synced; on retry ``_missing_dirs`` is empty, so only this
+    chain can prove them again. It ends at a mount point: that directory existed
+    before the mount, so its entry was never ours to make durable. Resolved with
+    ``realpath`` because ``makedirs`` created the entries where the links point.
+
+    R15 (GPT-6, 2026-10-28): the stop used to be "parent has another st_dev",
+    which proves a filesystem boundary but not a mount boundary (bind mounts of
+    the same filesystem share st_dev). :mod:`safeforge.mounts` stops only on
+    proof -- a different st_dev, or the OS's mount identity (statx mount id,
+    /proc/self/mountinfo, GetVolumePathNameW). Without such a source the walk
+    goes on across a same-st_dev mount (more syncs, never fewer). Returns the
+    chain and the name of the proof source (``ObjectStore.layout_mount_basis``).
+
+    SF-R38-01: ``mount_probe`` lets a second chain (an external staging
+    directory) reuse the probe of the first. A probe answers for any path --
+    where its statx proof is missing it falls back or keeps walking -- so one
+    mount table parse serves both chains.
+    """
+    out = []
+    path = os.path.realpath(path)
+    if mount_probe is None:
+        mount_probe = mounts.probe(path)
+    while True:
+        parent = os.path.dirname(path)
+        if parent == path or mount_probe.may_stop(path, parent):
+            return out, mount_probe.basis
+        out.append(path)
+        path = parent
+
+
+def _sync_parents(dirs: list[str]) -> dict[str, str]:
+    """fsync the parent of every directory in ``dirs``; report, never hide, a failure.
+
+    Returns ``{parent: status}`` with the statuses of :func:`durable.fsync_dir`
+    plus ``"failed:<error>"`` when it raises (e.g. a parent with execute but
+    no read permission, or EIO). Every parent is attempted, so the report is
+    complete; the caller decides -- :class:`ObjectStore` refuses to open on any
+    ``"failed:"`` (SF-R25-01).
+    """
+    out: dict[str, str] = {}
+    for parent in sorted({os.path.dirname(d) for d in dirs}, key=len, reverse=True):
+        try:
+            out[parent] = durable.fsync_dir(parent)
+        except OSError as e:
+            out[parent] = "failed:%s" % (e.strerror or e.__class__.__name__)
+    return out
 
 
 def _young(path: str, cutoff: float) -> bool:
@@ -218,7 +331,28 @@ def _check_private_path(path: str, *, directory: bool) -> None:
 
 
 class ObjectStore:
-    """One instance per thread (it owns one SQLite connection)."""
+    """One instance per thread (it owns one SQLite connection).
+
+    ``synchronous`` must stay FULL (the default) for an acknowledged ingest to
+    survive a power cut: under NORMAL the WAL is not synced at commit, and the
+    LazyFS test shows an acknowledged upload lost entirely
+    (tests/test_powerloss_lazyfs.py). NORMAL survives process crashes only.
+    ``layout_sync`` reports the fsyncs of the parents of root/, objects/,
+    staging/ and of every directory this instance created (SF-R14-01), plus
+    the directory holding the database, synced after the database exists
+    (SF-R28-01); a failed one raises :class:`LayoutNotDurable` instead
+    (SF-R25-01). Every entry must be ``"ok"`` for ``durability_prerequisites_ok``.
+    ``layout_mount_basis`` names how the ancestor chain found its mount
+    boundary (:mod:`safeforge.mounts`; ``"st_dev-only"`` = no OS mount
+    identity, the chain then walks through same-st_dev mounts; R15).
+    ``sqlite_runtime`` reports the SQLite library behind the connection and
+    whether it carries the WAL-reset fix; an affected library never blocks
+    open or ingest by default, but ``durability_prerequisites_ok`` stays False
+    on it (SF-R35-01). ``require_wal_reset_fix=True`` refuses an affected
+    library before anything is created (decision E2, 2026-10-27: default
+    False, because every python.org build is affected; releases are held by
+    ``python -m safeforge.sqlite_gate``).
+    """
 
     def __init__(
         self,
@@ -230,24 +364,34 @@ class ObjectStore:
         busy_timeout_ms: int = 5000,
         enforce_private: bool = False,
         coordinated: bool = False,
+        require_wal_reset_fix: bool = False,
     ) -> None:
         if type(coordinated) is not bool:
             raise ValueError("coordinated must be bool")
         if type(enforce_private) is not bool:
             raise ValueError("enforce_private must be bool")
+        # Default = Owner-Entscheid E2 offen (Board I1026-07); see db.connect.
+        # Checked here, before any directory is created, and again in db.connect.
+        if type(require_wal_reset_fix) is not bool:
+            raise TypeError("require_wal_reset_fix must be bool")
+        if require_wal_reset_fix:
+            db.check_wal_reset_fix()
         if enforce_private and os.name != "posix":
             raise ValueError("enforce_private requires POSIX permission semantics")
         root = os.path.abspath(root)
         from . import coordination
+
         if coordination.initialized(root) != coordinated:
             raise IngestError("coordination mode mismatch; migrate/opt in explicitly")
         if coordinated:
             # The offline backup snapshots ONLY root/safeforge.db and root/staging.
             # Arbitrary auxiliary paths would silently escape its inventory.
-            if db_path is not None and os.path.abspath(db_path) != os.path.join(root, 'safeforge.db'):
-                raise IngestError('coordinated mode requires database inside store root')
-            if staging_dir is not None and os.path.abspath(staging_dir) != os.path.join(root, 'staging'):
-                raise IngestError('coordinated mode requires canonical staging directory')
+            # SF-R36-03: compared as the kernel resolves it; "root/link/../safeforge.db"
+            # is lexically inside root but may be a file the backup never sees.
+            if db_path is not None and _kernel_entry(db_path) != os.path.join(os.path.realpath(root), "safeforge.db"):
+                raise IngestError("coordinated mode requires database inside store root")
+            if staging_dir is not None and os.path.abspath(staging_dir) != os.path.join(root, "staging"):
+                raise IngestError("coordinated mode requires canonical staging directory")
         self._coordinated_lock = None
         if coordinated:
             # A live, long-lived store holds SH across *all* writes and
@@ -259,6 +403,7 @@ class ObjectStore:
             # restore root; external clients bypassing this API are NOT protected.
             if os.path.lexists(os.path.join(root, "RESTORE_IN_PROGRESS")):
                 raise IngestError("restore root is incomplete; do not open")
+            created = _missing_dirs(root)
             os.makedirs(root, mode=0o700, exist_ok=True)
             if enforce_private:
                 # Reject an already-accessible root BEFORE touching child paths.
@@ -271,15 +416,49 @@ class ObjectStore:
                 for directory in (self.objects_dir, self.staging_dir):
                     if os.path.lexists(directory):
                         _check_private_path(directory, directory=True)
+            created += _missing_dirs(self.objects_dir) + _missing_dirs(self.staging_dir)
             os.makedirs(self.objects_dir, mode=0o700, exist_ok=True)
             os.makedirs(self.staging_dir, mode=0o700, exist_ok=True)
+            # SF-R14-01: a new directory's entry lives in its parent. Without
+            # this a power cut can drop objects/ (or root itself) together with
+            # every object acknowledged inside it; publish() only syncs
+            # objects/ and staging/, never their parents.
+            # SF-R25-01: a failure must stop the store, not just be recorded --
+            # an open store acknowledges ingests and idempotency replays. And
+            # the parents are re-synced on EVERY open, not only when this call
+            # created something: after a failed or crashed earlier open the
+            # layout exists (created == []) but was never proven durable. The
+            # extra fsyncs are idempotent and cheap. Platform statuses
+            # ("unsupported:" on Windows, "degraded:" on macOS) pass, as in
+            # ingest(), where only a raising fsync_dir prevents the ACK.
+            # SF-R36-01: the same holds for ancestors ABOVE root that a failed
+            # earlier open created (/existing/new/store with /existing unsynced):
+            # the whole same-mount chain is re-proven, not only `created`.
+            # R15: layout_mount_basis names what proved where the chain stops.
+            # SF-R38-01 (Codex on ac933f3): staging_dir has its own chain when it
+            # resolves outside root (an explicit path, or a link). A failed open can
+            # leave /external/new/spool/staging with /external unsynced, and an
+            # explicit db_path may live in those ancestors. So the staging chain is
+            # walked on every open as well, with the same probe; inside root it
+            # repeats root's chain (merged by _sync_parents). Cost: one stat walk
+            # and one fsync per extra ancestor level, no second mount-table parse.
+            mount_probe = mounts.probe(os.path.realpath(root))
+            ancestors, self.layout_mount_basis = _same_mount_ancestors(root, mount_probe)
+            staging_chain, _basis = _same_mount_ancestors(self.staging_dir, mount_probe)
+            self.layout_sync = _sync_parents(created + ancestors + staging_chain + [root, self.objects_dir, self.staging_dir])
+            failed = sorted(p for p, s in self.layout_sync.items() if s.startswith("failed:"))
+            if failed:
+                raise LayoutNotDurable(
+                    "store layout not durable: directory fsync failed for %s" % ", ".join(failed),
+                    self.layout_sync,
+                )
             # Publication must stay on one filesystem. Refuse a staging area on
             # another volume (e.g. /tmp on tmpfs) up front instead of failing with
             # EXDEV per upload -- or worse, silently degrading to copy+delete.
             durable.require_same_volume(self.staging_dir, self.objects_dir)
             self.db_path = db_path or os.path.join(root, "safeforge.db")
             if enforce_private:
-                if os.path.abspath(os.path.dirname(self.db_path)) != root:
+                if os.path.dirname(_kernel_entry(self.db_path)) != os.path.realpath(root):
                     raise ValueError("enforce_private requires the SQLite database directly under root")
                 for directory in (root, self.objects_dir, self.staging_dir):
                     _check_private_path(directory, directory=True)
@@ -288,11 +467,24 @@ class ObjectStore:
                     fd = os.open(self.db_path, flags, 0o600)
                     os.close(fd)
                 _check_private_path(self.db_path, directory=False)
-            self._conn = db.connect(self.db_path, synchronous=synchronous,
-                                    busy_timeout_ms=busy_timeout_ms, coordinated=coordinated)
+            self._conn = db.connect(
+                self.db_path,
+                synchronous=synchronous,
+                busy_timeout_ms=busy_timeout_ms,
+                coordinated=coordinated,
+                require_wal_reset_fix=require_wal_reset_fix,
+            )
+            # GPT-6 cross-family (SF-XF-WAL): the library THIS connection runs on,
+            # read from it, and whether it carries the WAL-reset fix. Several
+            # ObjectStores on one database are the bug's precondition (see
+            # safeforge.sqlite_runtime). A report, not a gate, unless
+            # require_wal_reset_fix=True.
+            self.sqlite_runtime = sqlite_runtime.loaded_sqlite_status(self._conn)
+            self._commit_survives_power_cut = synchronous.upper() in ("FULL", "EXTRA")
             with db.transaction(self._conn):
                 for stmt in filter(None, (s.strip() for s in _SCHEMA.split(";"))):
                     self._conn.execute(stmt)
+            self._sync_db_dirs()
 
         except BaseException:
             if hasattr(self, "_conn"):
@@ -303,6 +495,59 @@ class ObjectStore:
             raise
 
     # -- plumbing -----------------------------------------------------------
+    def _sync_db_dirs(self) -> None:
+        """SF-R28-01: fsync the directory holding the database, AFTER the database exists.
+
+        The layout fsyncs above run before SQLite creates the database file and
+        its -wal file, and an external ``db_path`` lies outside that layout
+        altogether (R28 case B, R29). So the database's directory is synced here
+        on every open, once the schema transaction has created both names, and
+        reported in ``layout_sync``. A symlinked ``db_path`` has two directories
+        (the link's and the target's); both are synced, and the alias itself is
+        reported ``"degraded:"`` because longer link chains are not followed.
+        A raising fsync refuses the store as in SF-R25-01 and is always
+        reported; otherwise an earlier non-"ok" status for the same directory
+        is kept.
+        """
+        # SF-R36-03 (Codex on 4f7404d): abspath() collapses "link/.." lexically, but
+        # SQLite's open() follows the link first -- "alias/link/../meta.db" with
+        # link -> actual/child is actual/meta.db. So the directory is resolved the
+        # way the kernel resolves it; only the final component keeps its own name,
+        # because a symlinked database file is reported as an alias below.
+        db_abs = _kernel_entry(self.db_path)
+        alias = os.path.islink(db_abs)
+        report = _sync_parents([db_abs, os.path.realpath(db_abs)] if alias else [db_abs])
+        for directory, status in report.items():
+            if self.layout_sync.get(directory, "ok") == "ok" or status.startswith("failed:"):
+                self.layout_sync[directory] = status
+        if alias:
+            self.layout_sync[db_abs] = "degraded:db_path-is-a-symlink"
+        failed = sorted(p for p, s in report.items() if s.startswith("failed:"))
+        if failed:
+            raise LayoutNotDurable(
+                "database directory not durable: directory fsync failed for %s" % ", ".join(failed),
+                self.layout_sync,
+            )
+
+    def _commit_policy_is_durable(self) -> bool:
+        """SF-R28-01 / SF-R31-01: the SQLite policy THIS transaction will commit under.
+
+        Must run inside the status-commit transaction, as its last statements:
+        SQLite refuses to change ``synchronous`` inside a transaction ("Safety
+        level may not be changed inside a transaction") and silently keeps the
+        journal mode, so what is read here is what the COMMIT uses. A value
+        remembered from ``__init__`` is not evidence: the caller can change a
+        PRAGMA on the connection between ingests. A failed read is missing
+        evidence (False), never a failed ingest.
+        """
+        try:
+            sync = self._conn.execute("PRAGMA synchronous").fetchone()[0]
+            journal = self._conn.execute("PRAGMA journal_mode").fetchone()[0]
+            fullfsync = self._conn.execute("PRAGMA fullfsync").fetchone()[0] if sys.platform == "darwin" else 1
+        except (sqlite3.Error, TypeError):
+            return False
+        return sync in (2, 3) and str(journal).lower() == "wal" and fullfsync == 1
+
     def close(self) -> None:
         try:
             self._conn.close()
@@ -365,9 +610,7 @@ class ObjectStore:
         """
         if not isinstance(oid, str) or not _ID_RE.fullmatch(oid):
             raise KeyError(oid)
-        row = self._conn.execute(
-            "SELECT sha256, size FROM objects WHERE id=? AND status='stored'", (oid,)
-        ).fetchone()
+        row = self._conn.execute("SELECT sha256, size FROM objects WHERE id=? AND status='stored'", (oid,)).fetchone()
         if row is None:
             raise KeyError(oid)
         try:
@@ -382,9 +625,12 @@ class ObjectStore:
             for chunk in iter(lambda: f.read(1 << 20), b""):
                 h.update(chunk)
             opened, after = os.fstat(f.fileno()), os.lstat(self._obj(oid))
-            if ((opened.st_dev, opened.st_ino) != (after.st_dev, after.st_ino)
-                    or not stat.S_ISREG(after.st_mode) or opened.st_size != size
-                    or h.hexdigest() != sha):
+            if (
+                (opened.st_dev, opened.st_ino) != (after.st_dev, after.st_ino)
+                or not stat.S_ISREG(after.st_mode)
+                or opened.st_size != size
+                or h.hexdigest() != sha
+            ):
                 raise IngestError("stored object digest or identity mismatch")
             f.seek(0)
             return f
@@ -409,9 +655,7 @@ class ObjectStore:
                 raise ValueError("%s must be a positive int" % name)
         if expected_sha256 is not None and (not isinstance(expected_sha256, str) or not _SHA_RE.fullmatch(expected_sha256)):
             raise ValueError("expected_sha256 must be 64 lowercase hex chars")
-        if idempotency_key is not None and (
-            not isinstance(idempotency_key, str) or not 0 < len(idempotency_key) <= 256
-        ):
+        if idempotency_key is not None and (not isinstance(idempotency_key, str) or not 0 < len(idempotency_key) <= 256):
             raise ValueError("idempotency_key must be a non-empty str of at most 256 chars")
 
         if idempotency_key is not None:
@@ -454,7 +698,7 @@ class ObjectStore:
                     f.write(chunk)
                     _faults.point("staging.chunk")
                 _faults.point("staging.written")
-                durable.fsync_file(f)
+                fsync_status = durable.fsync_file(f)
             _faults.point("staging.fsynced")
             digest = h.hexdigest()
             if expected_sha256 is not None and digest != expected_sha256:
@@ -488,7 +732,7 @@ class ObjectStore:
             mech = durable.publish(spath, opath)
             _faults.point("object.published")
             dsync = durable.fsync_dir(self.objects_dir)
-            durable.fsync_dir(self.staging_dir)
+            ssync = durable.fsync_dir(self.staging_dir)
             _faults.point("dirs.fsynced")
             # (5) conditional status commit
             with db.transaction(self._conn):
@@ -496,15 +740,32 @@ class ObjectStore:
                     "UPDATE objects SET status='stored', updated_at=? WHERE id=? AND status='pending'",
                     (time.time(), oid),
                 )
-                if cur.rowcount != 1:
+                # Only this UPDATE's own COMMIT can be attested. If the reconciler
+                # (another connection, with a policy never seen here) rolled the
+                # row forward first, the ACK stays, the durability claim does not.
+                committed_here = cur.rowcount == 1
+                if not committed_here:
                     final = self._status(oid)
                     if final != "stored":
                         raise IngestAborted("ingest %s was marked %r by the reconciler" % (oid, final))
+                policy_at_commit = self._commit_policy_is_durable()
             _faults.point("status.committed")
         except BaseException:
             self._abort(oid)
             raise
-        return IngestResult(oid, digest, size, False, mech, dsync)
+        # SF-R28-01: D_pre = F and O and S and L and W (see IngestResult). Pure
+        # computation after the COMMIT: nothing here can turn a committed ingest
+        # into a reported failure.
+        layout_ok = bool(self.layout_sync) and all(s == "ok" for s in self.layout_sync.values())
+        durable_ack = (
+            committed_here
+            and policy_at_commit
+            and self._commit_survives_power_cut
+            and layout_ok
+            and fsync_status == dsync == ssync == "ok"
+            and self.sqlite_runtime.get("fixed") is True
+        )
+        return IngestResult(oid, digest, size, False, mech, dsync, fsync_status, ssync, durable_ack)
 
     def _dedup(self, hit: tuple[str, str, str, int], digest: str | None) -> IngestResult:
         oid, status, sha, size = hit
@@ -531,7 +792,10 @@ class ObjectStore:
             pass  # the reconciler resolves whatever is left
 
     def reconcile(
-        self, *, grace_seconds: float = 300.0, now: float | None = None,
+        self,
+        *,
+        grace_seconds: float = 300.0,
+        now: float | None = None,
         verify_stored_digests: bool = False,
     ) -> ReconcileReport:
         """Bring disk and database back into agreement. Idempotent.
@@ -615,11 +879,9 @@ class ObjectStore:
                 rep.skipped.append("%s: %s" % (path, e))
 
         # (d) stored rows whose file is gone or wrong: cannot be repaired, only reported.
-        for oid, size in self._conn.execute(
-            "SELECT id, size FROM objects WHERE status='stored'"
-        ).fetchall():
+        for oid, size in self._conn.execute("SELECT id, size FROM objects WHERE status='stored'").fetchall():
             p = self._obj(oid)
-            if (os.path.islink(p) or not os.path.isfile(p) or os.path.getsize(p) != size):
+            if os.path.islink(p) or not os.path.isfile(p) or os.path.getsize(p) != size:
                 rep.missing_or_corrupt.append(oid)
             elif verify_stored_digests:
                 row = self._conn.execute("SELECT sha256 FROM objects WHERE id=?", (oid,)).fetchone()
@@ -630,9 +892,7 @@ class ObjectStore:
     def verify(self) -> list[str]:
         """Full re-hash of every stored object. Returns the ids that do not match."""
         bad = []
-        for oid, sha, size in self._conn.execute(
-            "SELECT id, sha256, size FROM objects WHERE status='stored'"
-        ).fetchall():
+        for oid, sha, size in self._conn.execute("SELECT id, sha256, size FROM objects WHERE status='stored'").fetchall():
             if not _file_matches(self._obj(oid), sha, size):
                 bad.append(oid)
         return bad

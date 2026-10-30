@@ -29,12 +29,17 @@ testpaths = ["tests"]
 pythonpath = ["src", "."]
 markers = [
     "slow: takes several seconds (e.g. the real 5000 ms busy_timeout expiry)",
+    "real_sqlite: runs against the real linked SQLite (no conftest pin of the WAL-reset status)",
 ]
 addopts = "-ra"
 
 [tool.ruff]
 line-length = 130
 target-version = "py312"
+
+[tool.ruff.format]
+# Markdown code blocks keep their hand-aligned comments (README "Use").
+exclude = ["*.md"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "B", "I", "UP"]

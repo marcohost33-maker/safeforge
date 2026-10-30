@@ -24,16 +24,65 @@ POSIX rename) run only in CI. Nothing here has been audited externally.
 
 ## What this does **not** claim
 
-- **No power-loss proof.** The crash tests kill the *process*
-  (`os._exit`, TerminateProcess, SIGKILL). The OS page cache survives that.
-  The fsync ordering for power loss is implemented and its order is tested; a
-  real power cut was not simulated, which would need a block-device fault
-  injector.
+- **Power loss: simulated in two halves, not proven.** Since R14 the ingest
+  protocol is tested against a power cut at every failpoint:
+  *data* with [LazyFS](https://github.com/dsrhaslab/lazyfs) (Ramos et al.,
+  PVLDB 17(11), 2024), a FUSE file system that drops every unsynced byte,
+  SQLite's WAL included (`tests/test_powerloss_lazyfs.py`, Linux, CI job
+  `powerloss`); *directory entries* with a model that lets every entry
+  created or removed since the directory's last fsync survive or vanish
+  independently (`tests/test_powerloss_dirmodel.py`, ALICE-style, POSIX).
+  LazyFS persists directory operations at once, so neither half alone is
+  enough. Not covered: reordered or torn device writes, drives or bridges that
+  ignore flushes, file systems whose fsync semantics differ from the model.
+  Negative controls show each half detects a missing step: without the
+  staging fsync an acknowledged object comes back empty; without the
+  directory fsyncs it disappears; with `synchronous=NORMAL` the acknowledged
+  upload is lost entirely.
 - **Windows directory durability.** Windows offers Python no directory fsync.
   `publish()` uses `MoveFileExW(MOVEFILE_WRITE_THROUGH)`, which Microsoft
   documents as "does not return until the file is actually moved on the
   disk". Microsoft documents no atomicity guarantee for it. The result reports
-  `dir_sync = "unsupported:…"` instead of hiding this.
+  `dir_sync = "unsupported:…"` instead of hiding this, and
+  `IngestResult.durability_prerequisites_ok` (formerly `powercut_durable`,
+  still readable as a deprecated alias) is True only where every observed
+  prerequisite was `"ok"`: the syncs of the ingest (file, objects/, staging/),
+  every entry of `ObjectStore.layout_sync` (including the directory that
+  holds the database, synced after the database exists), the SQLite
+  policy read inside the status-commit transaction (`synchronous` FULL/EXTRA,
+  `journal_mode` WAL, on macOS `fullfsync`), and a linked SQLite with the
+  WAL-reset fix (`ObjectStore.sqlite_runtime["fixed"] is True`, see below)
+  -- never on Windows. An ACK is a
+  logical ACK; read that field for the power-cut claim. It reports software
+  prerequisites, not a measured power-cut guarantee.
+- **SQLite WAL-reset bug (upstream).** sqlite.org documents a rare WAL-reset
+  race that can corrupt a WAL database when two or more connections write or
+  checkpoint at the same instant; it is fixed in SQLite 3.51.3 and in the
+  backports 3.44.6 and 3.50.7 (3.52.0 was withdrawn). One `ObjectStore` per
+  thread on the same database, coordinated stores in several processes and
+  `coordination.event_writer` next to a store all meet the precondition.
+  python.org builds of Python 3.12 (SQLite 3.49.1) and 3.13/3.14 (3.50.4) are
+  affected. The check reads the library actually loaded (`sqlite_version()`
+  and `sqlite_source_id()` from a live connection), not the Python version:
+  - `ObjectStore.sqlite_runtime` reports it for the store's own connection;
+  - `connect(..., require_wal_reset_fix=True)` / `ObjectStore(...,
+    require_wal_reset_fix=True)` refuse an affected library with
+    `WalResetBugUnfixed` (a `ConfigurationError`) before anything is opened or
+    created. The default is `False` (decision E2, 2026-10-27): every
+    python.org build is affected, so blocking by default would make the
+    library unusable there. An affected library still never yields
+    `durability_prerequisites_ok = True` (SF-R35-01);
+  - release gate: `python -m safeforge.sqlite_gate` exits 1 on an affected
+    library. `SAFEFORGE_ALLOW_UNFIXED_SQLITE=<reason>` is the only exception;
+    the verdict (`"waived"`) and the reason are printed. A release run must
+    not set it without a written reason. The decision is by version number: a
+    vendor backport without a version bump is reported as affected.
+- **macOS needs F_FULLFSYNC.** Apple's fsync(2) flushes to the drive, not
+  through its cache, and CPython's `os.fsync` does not issue `F_FULLFSYNC`.
+  `durable` issues it (falling back to fsync with status
+  `"degraded:darwin-F_FULLFSYNC-refused-fsync-only"`), and `db.connect` sets
+  SQLite's `PRAGMA fullfsync=ON` for FULL/EXTRA. Drives or bridges that ignore
+  the flush command cannot be detected from software.
 - **No content scanning.** A structurally valid archive can still carry
   malicious JavaScript. Serve uploads from a separate origin with a strict CSP.
 - **"Exactly once" only inside the database transaction.** External side
@@ -87,7 +136,7 @@ from Windows 11, Python 3.14.4, SQLite 3.50.4; the JSON in
 | T4 | Without WAL: `database is locked` | TEILWEISE | WAL does not remove writer/writer BUSY: 1412 of 1600 `BEGIN IMMEDIATE` attempts got BUSY with WAL and timeout 0. It does remove reader BUSY: 0 in WAL against 335–1942 in DELETE mode. |
 | T5 | WAL: unlimited non-blocked readers | TEILWEISE | "Mostly true" (sqlite.org/wal.html §9). Exclusive locking mode blocks readers (reproduced). Further limits: checkpoint starvation, same host only. |
 | T6 | `busy_timeout=5000` eliminates errors completely | **WIDERLEGT** | A DEFERRED read→write upgrade gets BUSY in <1 s despite 5000 ms. With WAL, 5000 ms and DEFERRED, 1401 of 1600 read-modify-write transactions failed. |
-| T7 | `synchronous=NORMAL` + WAL stays crash-tolerant | TEILWEISE | Consistent yes, durable across power loss no (pragma.html). The kill test lost 0 acknowledged commits in both modes. WAL+FULL ran 327 commits/s against 13 842 for NORMAL. |
+| T7 | `synchronous=NORMAL` + WAL stays crash-tolerant | TEILWEISE | Consistent yes, durable across power loss no (pragma.html). The kill test lost 0 acknowledged commits in both modes. Under a simulated power cut (LazyFS, R14) NORMAL lost an acknowledged upload (both commits gone, the object then reconciled away as an orphan); FULL lost none at any failpoint. WAL+FULL ran 327 commits/s against 13 842 for NORMAL. |
 | T8 | `mmap_size=256MB` lowers CPU dramatically | TEILWEISE | Read-only, warm cache: CPU ×0.533 (lookups), ×0.285 (scans). The source warns gains are not guaranteed and lists risks. Linux not measured. |
 | T9 | `BEGIN IMMEDIATE` avoids the upgrade deadlock | BESTÄTIGT (limit) | Real deadlock with DEFERRED in DELETE mode, reproduced. IMMEDIATE: 1600 of 1600 commits, 0 errors (WAL, 5000 ms). It does not prevent timeouts. |
 | T10 | Reconciliation pattern guarantees absolute integrity | **WIDERLEGT** / corrected | The uncommitted `pending` row cannot survive a crash, so staging leaks. A concurrent reconciler deletes a renamed file just before the commit, leaving a committed row without a file. fsyncs are missing. `/tmp` staging gives `EXDEV`. The lock is held during file I/O. The corrected protocol holds every invariant at all 8 crash points and against a concurrent reconciler at each point. |
@@ -113,6 +162,11 @@ python -m pytest -m "not slow"       # iteration
 python experiments/exp_sqlite_contention.py   # T4/T5/T6/T9 matrix (~40 s)
 python experiments/exp_sync_cost.py           # T7 cost side
 python experiments/exp_mmap.py                # T8
+
+# power cut, data half (Linux, FUSE 3; builds the pinned LazyFS):
+experiments/lazyfs/build_lazyfs.sh /tmp/lazyfs-build
+SAFEFORGE_LAZYFS_BIN=/tmp/lazyfs-build/lazyfs/lazyfs/build/lazyfs \
+    python -m pytest tests/test_powerloss_lazyfs.py
 ```
 
 Fault injection uses named failpoints (`safeforge._faults.point`). They can be
@@ -127,8 +181,9 @@ importing safeforge.
 src/safeforge/   store.py  durable.py  db.py  zipcheck.py  events.py  _faults.py
 tests/           test_fault_injection.py  test_sqlite_semantics.py  test_sqlite_durability.py
                  test_store.py  test_zipcheck.py  test_events.py
+                 test_powerloss_lazyfs.py  test_powerloss_dirmodel.py  (+ powerloss_driver/_model, lazyfs_harness)
                  designs/ (naive + reconstructed V0.3 pattern, negative controls only)
-experiments/     contention, sync cost, mmap + results/*.json
+experiments/     contention, sync cost, mmap + results/*.json; lazyfs/build_lazyfs.sh
 ```
 
 ## Sources

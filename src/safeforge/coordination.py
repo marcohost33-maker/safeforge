@@ -13,6 +13,8 @@ import threading
 from contextlib import contextmanager
 from pathlib import Path
 
+from . import durable
+
 MODE = ".safeforge-coordinated-v1"
 LOCK = ".safeforge-coordination.lock"
 MARKER_CONTENT = b"R8 cooperative POSIX-only; raw writes are not fenced\n"
@@ -28,24 +30,47 @@ def _contexts() -> dict:
     return _held.contexts
 
 
+def root_key(root: str | os.PathLike) -> tuple[int, int]:
+    """Registry identity of a store root: ``(st_dev, st_ino)`` of the directory.
+
+    R11 (SF-P3-03): lock() keyed by ``Path.absolute()`` and db.connect by
+    ``os.path.abspath``. abspath drops ``..`` lexically, the kernel resolves it
+    after symlinks, so ``root/link/../x`` named one directory for the guard and
+    another for sqlite3: a lock on one store unlocked the database of another.
+    The inode identity is what the kernel actually opens, for every spelling of
+    the path (``..``, symlinked parents, case-insensitive volumes).
+    """
+    try:
+        st = os.stat(root)
+    except OSError as exc:
+        raise CoordinationRejected("store root is not accessible") from exc
+    if not stat.S_ISDIR(st.st_mode):
+        raise CoordinationRejected("store root is not a directory")
+    return (st.st_dev, st.st_ino)
+
+
+def require_held_key(key: tuple[int, int]) -> None:
+    """:func:`require_held` for a key already computed with :func:`root_key`."""
+    if not _contexts().get(key):
+        raise CoordinationRejected("coordinated=True requires a live lock in this process/thread")
+
+
 def require_held(root: str | os.PathLike) -> None:
     """Reject a coordinated DB connection unless this thread actually holds a lock.
 
     Direct sqlite3 clients still bypass this *library* guard. Inherited/forked
     thread-local context is invalid because the PID must match.
     """
-    key = str(Path(root).absolute())
-    if not _contexts().get(key):
-        raise CoordinationRejected("coordinated=True requires a live lock in this process/thread")
+    require_held_key(root_key(root))
 
 
 def _check_marker(root: Path) -> None:
     marker = root / MODE
     try:
         st = os.lstat(marker)
-        if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1 or st.st_uid != os.getuid() or (st.st_mode & 0o077):
+        if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1 or st.st_uid != os.geteuid() or (st.st_mode & 0o077):
             raise CoordinationRejected("invalid coordination marker metadata")
-        fd = os.open(marker, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        fd = os.open(marker, os.O_RDONLY | os.O_NOFOLLOW)
         try:
             opened = os.fstat(fd)
             if (opened.st_dev, opened.st_ino) != (st.st_dev, st.st_ino):
@@ -57,6 +82,10 @@ def _check_marker(root: Path) -> None:
             raise CoordinationRejected("invalid coordination marker content")
     except FileNotFoundError as exc:
         raise CoordinationRejected("coordination not initialized") from exc
+    except OSError as exc:
+        # R11 (SF-R11-01): a marker swapped for a symlink between lstat and
+        # open fails O_NOFOLLOW with ELOOP; that is a rejection, not a crash.
+        raise CoordinationRejected("coordination marker cannot be opened safely") from exc
 
 
 class CoordinationRejected(RuntimeError):
@@ -66,6 +95,10 @@ class CoordinationRejected(RuntimeError):
 def _fcntl():
     if os.name != "posix":
         raise CoordinationRejected("POSIX flock is required; no Windows guarantee")
+    # R12 (SF-P2-02): the marker and lock opens rely on O_NOFOLLOW. A platform
+    # without it must refuse, not open with a silently weaker flag set.
+    if not hasattr(os, "O_NOFOLLOW"):
+        raise CoordinationRejected("O_NOFOLLOW is required for coordination")
     import fcntl
 
     return fcntl
@@ -74,14 +107,24 @@ def _fcntl():
 def _regular_fd(root: Path) -> int:
     path = root / LOCK
     # No symlink following, never replace the lock inode.
-    fd = os.open(path, os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
-    mode = os.fstat(fd).st_mode
-    if not stat.S_ISREG(mode):
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    except OSError as exc:
+        # R11 (SF-R11-01): symlink (ELOOP) or directory (EISDIR) in place of the lock.
+        raise CoordinationRejected("lock must be a regular file") from exc
+    st = os.fstat(fd)
+    if not stat.S_ISREG(st.st_mode):
         os.close(fd)
         raise CoordinationRejected("lock must be a regular file")
-    if os.fstat(fd).st_nlink != 1:
+    if st.st_nlink != 1:
         os.close(fd)
         raise CoordinationRejected("lock must not have extra hard links")
+    # R12: the same owner/mode rule as the marker. Only reachable on POSIX in
+    # production (_fcntl refuses elsewhere); the guard keeps the portable,
+    # OS-stubbed tests running on Windows, which has no geteuid.
+    if os.name == "posix" and (st.st_uid != os.geteuid() or st.st_mode & 0o077):
+        os.close(fd)
+        raise CoordinationRejected("lock must be owned by us and mode 0600 or stricter")
     return fd
 
 
@@ -89,7 +132,7 @@ def _private_root(root: Path) -> None:
     if root.is_symlink() or not root.is_dir():
         raise CoordinationRejected("source root must be a real directory")
     st = root.stat()
-    if (st.st_mode & 0o077) or st.st_uid != os.getuid():
+    if (st.st_mode & 0o077) or st.st_uid != os.geteuid():
         raise CoordinationRejected("coordinated source root must be owned and mode 0700 or stricter")
 
 
@@ -112,14 +155,10 @@ def initialize(root: str | os.PathLike, *, externally_quiescent: bool = False) -
             fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
             try:
                 os.write(fd, MARKER_CONTENT)
-                os.fsync(fd)
+                durable.fsync_fd(fd)
             finally:
                 os.close(fd)
-            dfd = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-            try:
-                os.fsync(dfd)
-            finally:
-                os.close(dfd)
+            durable.fsync_dir(str(path))
         _check_marker(path)
 
 
@@ -152,7 +191,7 @@ def lock(root: str | os.PathLike, *, exclusive: bool, require_marker: bool = Tru
         # Validate marker AFTER acquiring the lock as well as before.
         if require_marker:
             _check_marker(root)
-        key = str(root)
+        key = root_key(root)
         contexts = _contexts()
         contexts[key] = contexts.get(key, 0) + 1
         try:

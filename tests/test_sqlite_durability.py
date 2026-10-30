@@ -38,8 +38,13 @@ while True:
 @pytest.mark.parametrize("sync", ["NORMAL", "FULL"])
 def test_t7_acknowledged_commits_survive_process_kill(tmp_path, sync):
     db = str(tmp_path / "d.db")
-    p = subprocess.Popen([sys.executable, "-c", CHILD, db, sync], stdin=subprocess.DEVNULL,
-                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    p = subprocess.Popen(
+        [sys.executable, "-c", CHILD, db, sync],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
     acked = -1
     try:
         for line in p.stdout:

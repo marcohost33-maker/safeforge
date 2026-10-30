@@ -4,7 +4,7 @@ file + SQLite ingest, ZIP upload validation and idempotent event handling.
 Standard library only. See README.md for scope and claim limits.
 """
 
-from .db import ConfigurationError, connect, transaction
+from .db import ConfigurationError, WalResetBugUnfixed, connect, transaction
 from .durable import CrossDeviceError, fsync_dir, fsync_file, publish, require_same_volume
 from .events import EventResult, PayloadMismatch, ensure_schema, process_event
 from .store import (
@@ -14,6 +14,7 @@ from .store import (
     IngestError,
     IngestInFlight,
     IngestResult,
+    LayoutNotDurable,
     ObjectStore,
     ReconcileReport,
     TooLarge,
@@ -32,10 +33,12 @@ __all__ = [
     "IngestError",
     "IngestInFlight",
     "IngestResult",
+    "LayoutNotDurable",
     "ObjectStore",
     "PayloadMismatch",
     "ReconcileReport",
     "TooLarge",
+    "WalResetBugUnfixed",
     "ZipEntry",
     "ZipPolicy",
     "ZipRejected",

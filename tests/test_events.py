@@ -44,8 +44,7 @@ def test_t13_check_then_insert_issues_two_licences(tmp_path):
         gate.wait()  # both deliveries have checked; neither has inserted yet
         if seen is None:
             c.execute("INSERT INTO licences(event_id) VALUES ('evt_1')")
-            c.execute("INSERT OR IGNORE INTO processed_events(event_id, payload_sha, received_at)"
-                      " VALUES ('evt_1', 'x', 0)")
+            c.execute("INSERT OR IGNORE INTO processed_events(event_id, payload_sha, received_at) VALUES ('evt_1', 'x', 0)")
         c.close()
 
     ts = [threading.Thread(target=deliver) for _ in range(2)]
@@ -101,8 +100,11 @@ def test_t13_failed_effect_is_not_recorded_and_can_be_retried(tmp_path):
     assert r.applied and _licences(path, "evt_3") == 1
 
 
-@pytest.mark.parametrize("bad", ["", "a b", "x" * 201, None, 5, "evt\n1", "evt1\n"],
-                         ids=["empty", "space", "too-long", "none", "int", "inner-newline", "trailing-newline"])
+@pytest.mark.parametrize(
+    "bad",
+    ["", "a b", "x" * 201, None, 5, "evt\n1", "evt1\n"],
+    ids=["empty", "space", "too-long", "none", "int", "inner-newline", "trailing-newline"],
+)
 def test_t13_rejects_malformed_event_ids(tmp_path, bad):
     c = _setup(str(tmp_path / "e.db"))
     with pytest.raises(ValueError):

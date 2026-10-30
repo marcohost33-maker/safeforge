@@ -13,10 +13,14 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 def env() -> dict:
     try:
-        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=HERE, capture_output=True, text=True,
-                              stdin=subprocess.DEVNULL).stdout.strip()
-        dirty = bool(subprocess.run(["git", "status", "--porcelain"], cwd=HERE, capture_output=True, text=True,
-                                    stdin=subprocess.DEVNULL).stdout.strip())
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=HERE, capture_output=True, text=True, stdin=subprocess.DEVNULL
+        ).stdout.strip()
+        dirty = bool(
+            subprocess.run(
+                ["git", "status", "--porcelain"], cwd=HERE, capture_output=True, text=True, stdin=subprocess.DEVNULL
+            ).stdout.strip()
+        )
     except OSError:
         head, dirty = "", None
     return {

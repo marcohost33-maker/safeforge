@@ -54,7 +54,11 @@ POSIX rename) run only in CI. Nothing here has been audited externally.
   WAL-reset fix (`ObjectStore.sqlite_runtime["fixed"] is True`, see below)
   -- never on Windows. An ACK is a
   logical ACK; read that field for the power-cut claim. It reports software
-  prerequisites, not a measured power-cut guarantee.
+  prerequisites, not a measured power-cut guarantee. The ACK also names the
+  evidence it stands on (SF-R39-02): `layout_mount_basis` (what ended the
+  ancestor walk; `"st_dev-only"` on macOS/BSD walks through same-device
+  mounts and syncs more, never less) and `sqlite_version` /
+  `sqlite_wal_reset_fixed` for the library behind the store.
 - **SQLite WAL-reset bug (upstream).** sqlite.org documents a rare WAL-reset
   race that can corrupt a WAL database when two or more connections write or
   checkpoint at the same instant; it is fixed in SQLite 3.51.3 and in the
@@ -73,10 +77,15 @@ POSIX rename) run only in CI. Nothing here has been audited externally.
     library unusable there. An affected library still never yields
     `durability_prerequisites_ok = True` (SF-R35-01);
   - release gate: `python -m safeforge.sqlite_gate` exits 1 on an affected
-    library. `SAFEFORGE_ALLOW_UNFIXED_SQLITE=<reason>` is the only exception;
-    the verdict (`"waived"`) and the reason are printed. A release run must
-    not set it without a written reason. The decision is by version number: a
-    vendor backport without a version bump is reported as affected.
+    library. Its default profile `release` accepts **no** waiver (exit 3 if
+    one is offered), and a GitHub tag or `release` run is always gated as a
+    release. Only `--profile ci` accepts
+    `SAFEFORGE_ALLOW_UNFIXED_SQLITE="expires=YYYY-MM-DD; reason=<text>"`,
+    at most 120 days ahead; a free-text, malformed or expired waiver exits 2,
+    so every CI waiver comes back for a new decision (SF-R39-01). Who may
+    write one is decided by review of the workflow file; there is no
+    signature check. The decision is by version number: a vendor backport
+    without a version bump is reported as affected.
 - **macOS needs F_FULLFSYNC.** Apple's fsync(2) flushes to the drive, not
   through its cache, and CPython's `os.fsync` does not issue `F_FULLFSYNC`.
   `durable` issues it (falling back to fsync with status

@@ -6,6 +6,45 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### R39 (2026-10-30): no waiver in a release; the ACK names its evidence
+
+- **Fixed SF-R39-01 (P1, GPT-6 cross-family A2 on 89a0381)**: the release gate
+  turned an affected SQLite into verdict `"waived"`, exit 0, for ANY non-blank
+  value of `SAFEFORGE_ALLOW_UNFIXED_SQLITE` -- an inherited runner variable,
+  an organisation secret or a copied job was enough to pass a release, with no
+  end date. Reproduced at 484f8d8 (SQLite 3.45.1): `="inherited"` gave exit 0,
+  also with `GITHUB_REF_TYPE=tag`. Now:
+  - `release_gate(..., profile="release")` and `python -m
+    safeforge.sqlite_gate` default to `release`, which accepts no waiver:
+    offered anyway -> `"waiver-forbidden"`, exit 3.
+  - `--profile ci` accepts only `expires=YYYY-MM-DD; reason=<text>` (each key
+    once, reason non-blank, expiry day inclusive, at most `MAX_WAIVER_DAYS` =
+    120 ahead); anything else -> `"invalid-waiver"`, exit 2 with the error in
+    `waiver_error`. An expired waiver turns CI red again.
+  - A GitHub run with `GITHUB_REF_TYPE=tag` or `GITHUB_EVENT_NAME=release` is
+    gated as `release` whatever profile was asked for.
+  - CI runs `--profile ci` with `expires=2027-01-31`; a test checks that the
+    workflow's waiver parses and sits next to `--profile ci` only.
+  - Not done: a signed owner approval. The authority for a CI waiver is the
+    review of the workflow file; an attacker who controls the release job's
+    command line can skip the gate anyway (module docstring).
+  Tests: `tests/test_r39_release_waiver.py`; 11 mutants of the new guards
+  (release accepts a waiver, no/exclusive expiry, no horizon, no tag/release
+  override, blank reason, duplicate/unknown key, default `ci`, truthy `fixed`)
+  each killed by an assertion.
+- **Added SF-R39-02 (question 3, second round 2026-10-29)**: is "keep walking
+  without mount proof" (macOS/BSD, `st_dev-only`) fail-safe? Yes for
+  durability: a test on one tree with a simulated same-device bind mount
+  shows the `st_dev-only` walk syncs a strict superset of the mount-aware
+  walk and reaches the same flag; the cost is availability (an unreadable
+  outer ancestor refuses the open), never a missing sync. So the flag keeps
+  its meaning and the ACK reports the basis instead: new `IngestResult`
+  fields `layout_mount_basis`, `sqlite_version`, `sqlite_wal_reset_fixed`
+  (the 2026-10-27 review recommendation); empty/False on a deduplicated
+  result. Not added to the backup report: a backup needs quiescent writers,
+  so the WAL-reset race does not apply while it runs.
+  Tests: `tests/test_r39_ack_evidence.py`.
+
 ### R38 (2026-10-29): external staging chain, linear mount table (Codex on ac933f3)
 
 - **Fixed SF-R38-01 (P2)**: a `staging_dir` outside `root` has its own ancestor

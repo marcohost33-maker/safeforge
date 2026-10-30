@@ -19,9 +19,10 @@ whenever a service accepts uploads and keeps metadata in SQLite:
 Standard library only (Python ≥ 3.12). Apache-2.0.
 
 **Maturity: research prototype, v0.1.0.** CI runs the suite on Ubuntu,
-Windows and macOS with Python 3.12 and 3.13, a LazyFS power-cut job, and one
-job against SQLite 3.54.1 built from source (the only library in CI with the
-WAL-reset fix). Each round was reviewed across model families (see
+Windows and macOS with Python 3.12 and 3.13, a LazyFS power-cut job, real
+kernel mounts (bind, tmpfs, overlayfs), and five SQLite builds from source
+at the WAL-reset boundaries (3.51.2 affected; 3.51.3, 3.54.1 and the
+backports 3.50.7, 3.44.6 fixed). Each round was reviewed across model families (see
 CHANGELOG); nothing here has been audited externally, and there is no release.
 
 ## What this does **not** claim
@@ -52,9 +53,16 @@ CHANGELOG); nothing here has been audited externally, and there is no release.
   every entry of `ObjectStore.layout_sync` (including the directory that
   holds the database, synced after the database exists), the SQLite
   policy read inside the status-commit transaction (`synchronous` FULL/EXTRA,
-  `journal_mode` WAL, on macOS `fullfsync`), and a linked SQLite with the
-  WAL-reset fix (`ObjectStore.sqlite_runtime["fixed"] is True`, see below)
-  -- never on Windows. An ACK is a
+  `journal_mode` WAL, on macOS `fullfsync`), a linked SQLite with the
+  WAL-reset fix (`ObjectStore.sqlite_runtime["fixed"] is True`, see below),
+  and a **local** filesystem under root/, objects/, staging/ and the
+  database (`filesystem_class == "local"`, SF-R41-01): tmpfs answers every
+  fsync with "ok" and still loses the store on a power cut, so tmpfs, ramfs,
+  overlayfs mounted `volatile` or with its upper directory on tmpfs count as
+  `volatile`, NFS/SMB/9p/Ceph and macOS mounts without `MNT_LOCAL` as
+  `network`, and an unobservable type (e.g. a container's root overlay,
+  whose upper directory lies outside its mount namespace) as `unknown` --
+  never on Windows. An ACK is a
   logical ACK; read that field for the power-cut claim. It reports software
   prerequisites, not a measured power-cut guarantee. The ACK also names the
   evidence it stands on (SF-R39-02): `layout_mount_basis` (what ended the
@@ -104,7 +112,10 @@ CHANGELOG); nothing here has been audited externally, and there is no release.
   malicious JavaScript. Serve uploads from a separate origin with a strict CSP.
 - **"Exactly once" only inside the database transaction.** External side
   effects such as e-mail or HTTP calls need an outbox.
-- **One host.** SQLite WAL does not work on network filesystems.
+- **One host.** SQLite WAL does not work on network filesystems; a store on
+  one is reported `filesystem_class: "network"` and never claims durability.
+  A RAM disk formatted with a disk filesystem (zram + ext4, macOS `ram://`)
+  looks local: only the filesystem type is observed, not the device.
 
 ## Use
 

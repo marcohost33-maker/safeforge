@@ -15,7 +15,7 @@ import sqlite3
 from contextlib import closing
 from pathlib import Path
 
-from . import durable
+from . import durable, sqlite_runtime
 from .store import _file_matches, _open_regular
 
 _NAME = re.compile(r"^[0-9a-f]{32}$")
@@ -179,6 +179,9 @@ def backup_offline(source_root: str | os.PathLike, destination: str | os.PathLik
     read = sqlite3.connect(dbfile.as_uri() + "?mode=ro", uri=True, isolation_level=None)
     try:
         v_before = read.execute("PRAGMA data_version").fetchone()[0]
+        # The library that runs read.backup(): reported, not gated (same source as
+        # IngestResult.sqlite_version, read from the connection itself).
+        runtime = sqlite_runtime.loaded_sqlite_status(read)
         _integrity(read)
         expected = _rows(read)
         if _list_regular_names(src / "objects") != {e["id"] for e in expected}:
@@ -233,7 +236,12 @@ def backup_offline(source_root: str | os.PathLike, destination: str | os.PathLik
         file_syncs.append(_write_sync(dst / "COMPLETE", hashlib.sha256(material).hexdigest().encode("ascii") + b"\n"))
         syncs.append(durable.fsync_dir(str(dst)))
         syncs.append(durable.fsync_dir(str(dst.parent)))
-        return {**verify_backup(dst), **_durability(syncs, file_syncs)}
+        return {
+            **verify_backup(dst),
+            **_durability(syncs, file_syncs),
+            "sqlite_version": runtime["version"],
+            "sqlite_wal_reset_fixed": runtime["fixed"],
+        }
     finally:
         read.close()
 

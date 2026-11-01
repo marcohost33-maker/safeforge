@@ -30,7 +30,13 @@ def test_backup_and_restore_bytes_and_sqlite_rows(tmp_path):
     # read-only verify cannot know that and reports integrity only.
     verified = verify_backup(archive)
     assert {k: report[k] for k in verified} == verified
-    assert set(report) - set(verified) == {"directory_fsync", "file_fsync", "power_loss_verified"}
+    assert set(report) - set(verified) == {
+        "directory_fsync",
+        "file_fsync",
+        "power_loss_verified",
+        "sqlite_version",
+        "sqlite_wal_reset_fixed",
+    }
     target = tmp_path / "restored"
     assert restore_offline(archive, target, confirmed_quiescent=True)["stored_objects"] == 2
     with ObjectStore(str(target)) as s:
@@ -198,3 +204,25 @@ def test_backup_database_fsync_uses_writable_handle(tmp_path):
             raise AssertionError("backup_offline fsynced through a read-only handle: %r" % (exc,)) from exc
         raise
     assert report["stored_objects"] == 2
+
+
+def test_backup_report_names_the_sqlite_library_that_made_the_snapshot(tmp_path, monkeypatch):
+    """I1027-04 (R35): the report says which SQLite ran read.backup(), read from that connection."""
+    from safeforge import sqlite_runtime
+
+    src, _ids = _stored(tmp_path)
+    seen = []
+    real = sqlite_runtime.loaded_sqlite_status  # the conftest pin: the same seam the store uses
+
+    def spy(conn=None):
+        seen.append(conn)
+        return real(conn)
+
+    monkeypatch.setattr(sqlite_runtime, "loaded_sqlite_status", spy)
+    report = backup_offline(src, tmp_path / "archive", confirmed_quiescent=True)
+    library = real()
+    assert report.get("sqlite_version") == library["version"] == sqlite3.connect(":memory:").execute(
+        "select sqlite_version()"
+    ).fetchone()[0]
+    assert report.get("sqlite_wal_reset_fixed") is library["fixed"]
+    assert len(seen) == 1 and isinstance(seen[0], sqlite3.Connection), seen

@@ -6,6 +6,44 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### R42/R43 (2026-11-01): local is an allowlist, flush switches count, the class is re-checked at ACK
+
+Issue #7; 007acc2 cross-family R42/R43/R44 (GPT-6), triaged against 066cbdf.
+
+- **Fixed SF-R42-01 (P1)**: mount and super options were only read for
+  overlayfs `volatile`; every type outside the volatile and network lists
+  was `local` -- ext4 `nobarrier`/`barrier=0`, f2fs `fsync_mode=nobarrier` or
+  `checkpoint=disable`, FUSE (LazyFS), any type never seen. `local` is now an
+  allowlist: Linux ext4, xfs, btrfs, zfs, f2fs; macOS apfs. Any other type is
+  `unknown` with `reason: "fs-type-not-attested"`; an allowlisted type with
+  `nobarrier`, `barrier=0`, `fsync_mode=nobarrier` or `checkpoint=disable[:...]`
+  in either option set is `unknown` with `reason: "mountinfo-flush-disabled"`
+  and `option`, also when reached through an overlay's upper directory.
+  Limit: ZFS `sync=disabled` is a dataset property, not in mountinfo.
+- **Fixed SF-R42-02 / SF-R44-01/02 (Windows)**: every drive type except
+  REMOTE and RAMDISK was local, including 0 (unknown), 1 (no root),
+  2 (removable) and 5 (CD-ROM), with any filesystem name. Now only NTFS on
+  `DRIVE_FIXED` is local; otherwise `unknown` (`reason: "not-a-fixed-drive"`
+  or `"fs-type-not-attested"`, e.g. ReFS, FAT32, exFAT).
+- **Fixed SF-R43-TOCTOU (P1)**: the class was decided once in the
+  constructor and read at ACK time. After each status COMMIT, `ingest()` now
+  re-reads the class (mountinfo on Linux) and `(realpath, st_dev, st_ino)` of
+  root/, objects/, staging/, the database directory and file, and compares
+  both with the constructor's; any difference or observation error makes the
+  flag False for that ingest (never an exception; the ingest stays
+  committed). `IngestResult.filesystem_class` is now the post-COMMIT class;
+  `ObjectStore.filesystem_class` stays the class at open.
+- **SF-R42-03 (CI)**: the `mounts` job loop-mounts two fresh ext4 images,
+  with barriers (positive control: local, flag True) and `nobarrier`
+  (negative control: unknown, flag False); the pure mountinfo fixtures in
+  `tests/test_r42_flush_classification.py` run on every runner.
+- **Behaviour change (API)**: stores that reported `filesystem_class ==
+  "local"` before may now report `"unknown"` and `durability_prerequisites_ok
+  = False`: LazyFS and other FUSE mounts, ext2/ext3, vfat/exFAT, macOS HFS+,
+  ReFS (including Windows Dev Drive), removable or unknown Windows drive types,
+  and allowlisted filesystems mounted with flushes off. Open and ingest are
+  unchanged. Each ingest of a local store now reads the mount table once more.
+
 ### R41 (2026-10-30): the durability flag observes the filesystem; real boundary libraries and mounts
 
 Roadmap R4/R5 (2026-10-29), SafeForge P0 "filesystem durability cross-platform

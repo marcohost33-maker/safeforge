@@ -45,7 +45,8 @@ mount options, last field super options; proc_pid_mountinfo(5)), parsed by
 mount point is on the same device as the path -- not a path prefix: firmlinks
 put /private/var and /Users on /System/Volumes/Data (CI macos-latest, R41).
 Windows ``GetVolumePathNameW`` +
-``GetDriveTypeW`` (DRIVE_REMOTE, DRIVE_RAMDISK) + ``GetVolumeInformationW``.
+``GetDriveTypeW`` (DRIVE_REMOTE, DRIVE_RAMDISK; only DRIVE_FIXED can be local)
++ ``GetVolumeInformationW``.
 
 Limits: a RAM disk formatted with a disk filesystem (macOS ``hdiutil`` ram://,
 Linux brd/zram + ext4) looks local; a block device's write cache is not

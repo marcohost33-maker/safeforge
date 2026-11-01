@@ -37,6 +37,15 @@ Issue #7; 007acc2 cross-family R42/R43/R44 (GPT-6), triaged against 066cbdf.
   with barriers (positive control: local, flag True) and `nobarrier`
   (negative control: unknown, flag False); the pure mountinfo fixtures in
   `tests/test_r42_flush_classification.py` run on every runner.
+- **CI runner fact**: the GitHub-hosted ubuntu-24.04 root disk is mounted
+  `nobarrier` (observed 2026-11-01, PR #8, mounts job 125000197175:
+  `/dev/root ... rw,discard,journal_async_commit,nobarrier,...`), so
+  `tmp_path` there is `unknown` and never claims durability. Tests whose
+  subject is another prerequisite (syncs, SQLite policy and library, the
+  ancestor walk) now request the named fixture `injected_local_filesystem`
+  instead of depending on where `tmp_path` lives; the matrix expects the
+  root-disk bind and overlay cases `unknown` and gets its real `local` bind
+  and overlay positive controls from the barrier loop mount.
 - **Behaviour change (API)**: stores that reported `filesystem_class ==
   "local"` before may now report `"unknown"` and `durability_prerequisites_ok
   = False`: LazyFS and other FUSE mounts, ext2/ext3, vfat/exFAT, macOS HFS+,

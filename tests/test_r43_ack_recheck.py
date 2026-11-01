@@ -107,10 +107,19 @@ def test_layout_directory_replaced_between_open_and_ingest(tmp_path, view):
     assert (r.filesystem_class, r.durability_prerequisites_ok) == ("unknown", False)
 
 
+def _outcome(fn):
+    """Result or the exception, so a raise fails an assertion instead of crashing the test."""
+    try:
+        return fn()
+    except Exception as e:  # noqa: BLE001 - the test asserts there is none
+        return e
+
+
 def test_probe_failure_after_commit_is_false_not_an_exception(tmp_path, view):
     with ObjectStore(str(tmp_path / "root")) as s:
         view["raise_on"] = view["calls"] + 1  # the next classification: the one after the COMMIT
-        r = _ingest(s)
+        r = _outcome(lambda: _ingest(s))
+        assert not isinstance(r, Exception), r
         assert s.status_of(r.object_id) == "stored"
     assert (r.filesystem_class, r.durability_prerequisites_ok) == ("unknown", False)
 
@@ -118,28 +127,45 @@ def test_probe_failure_after_commit_is_false_not_an_exception(tmp_path, view):
 def test_layout_path_vanished_after_commit_is_false_not_an_exception(tmp_path, view, monkeypatch):
     from safeforge import store as store_mod
 
+    def gone(paths):
+        raise FileNotFoundError("layout path vanished")
+
     with ObjectStore(str(tmp_path / "root")) as s:
-        real = store_mod._layout_identity
-
-        def gone(paths):
-            raise FileNotFoundError("layout path vanished")
-
         monkeypatch.setattr(store_mod, "_layout_identity", gone)
-        r = _ingest(s)
-        monkeypatch.setattr(store_mod, "_layout_identity", real)
+        r = _outcome(lambda: _ingest(s))
+    assert not isinstance(r, Exception), r
     assert (r.filesystem_class, r.durability_prerequisites_ok) == ("unknown", False)
 
 
 def test_identity_not_observable_at_open_never_claims(tmp_path, view, monkeypatch):
+    """stat fails at open only: the store opens (a report, never a refusal) and the
+    missing baseline never matches the identity observed after the COMMIT."""
     from safeforge import store as store_mod
 
-    def unobservable(paths):
-        raise PermissionError("stat refused")
+    real, calls = store_mod._layout_identity, []
 
-    monkeypatch.setattr(store_mod, "_layout_identity", unobservable)
-    with ObjectStore(str(tmp_path / "root")) as s:  # opens: a report, never a refusal
+    def first_call_refused(paths):
+        calls.append(1)
+        if len(calls) == 1:
+            raise PermissionError("stat refused")
+        return real(paths)
+
+    monkeypatch.setattr(store_mod, "_layout_identity", first_call_refused)
+    s = _outcome(lambda: ObjectStore(str(tmp_path / "root")))
+    assert not isinstance(s, Exception), s
+    with s:
         r = _ingest(s)
-    assert r.durability_prerequisites_ok is False
+    assert len(calls) == 2
+    assert (r.filesystem_class, r.durability_prerequisites_ok) == ("unknown", False)
+
+
+def test_a_different_local_filesystem_at_ack_is_not_the_one_seen_at_open(tmp_path, view):
+    """Same inodes, but the table now names another (allowlisted) filesystem for them:
+    the class is still "local", the observation is not the constructor's."""
+    with ObjectStore(str(tmp_path / "root")) as s:
+        view["table"] = EXT4.replace("- ext4 /dev/vdb rw", "- xfs /dev/vdb rw")
+        r = _ingest(s)
+    assert (r.filesystem_class, r.durability_prerequisites_ok) == ("unknown", False)
 
 
 def test_not_local_at_open_is_not_rechecked(tmp_path, view):

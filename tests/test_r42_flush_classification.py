@@ -104,7 +104,7 @@ def test_overlay_inherits_the_upper_filesystems_flush_switch(option):
     fstype = "ext4" if option == "nobarrier" else "f2fs"
     table = _table(fstype, super_opts="rw," + option, upper=True)
     info = classify_linux("/merged/store", table, exists=lambda p: p == "/data/up")
-    assert (info["fstype"], info["upper_fstype"], info["class"], info["reason"], info["option"]) == (
+    assert (info["fstype"], info.get("upper_fstype"), info["class"], info.get("reason"), info.get("option")) == (
         "overlay",
         fstype,
         "unknown",
@@ -115,7 +115,7 @@ def test_overlay_inherits_the_upper_filesystems_flush_switch(option):
 
 def test_overlay_upper_on_an_unattested_type_is_unknown():
     info = classify_linux("/merged/store", _table("fuse.lazyfs", upper=True), exists=lambda p: p == "/data/up")
-    assert (info["upper_fstype"], info["class"], info["reason"]) == ("fuse.lazyfs", "unknown", "fs-type-not-attested")
+    assert (info.get("upper_fstype"), info["class"], info.get("reason")) == ("fuse.lazyfs", "unknown", "fs-type-not-attested")
 
 
 def test_overlay_positive_control_upper_on_ext4_stays_local():

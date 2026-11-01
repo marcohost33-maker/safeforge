@@ -221,8 +221,10 @@ def test_backup_report_names_the_sqlite_library_that_made_the_snapshot(tmp_path,
     monkeypatch.setattr(sqlite_runtime, "loaded_sqlite_status", spy)
     report = backup_offline(src, tmp_path / "archive", confirmed_quiescent=True)
     library = real()
-    assert report.get("sqlite_version") == library["version"] == sqlite3.connect(":memory:").execute(
-        "select sqlite_version()"
-    ).fetchone()[0]
+    assert (
+        report.get("sqlite_version")
+        == library["version"]
+        == sqlite3.connect(":memory:").execute("select sqlite_version()").fetchone()[0]
+    )
     assert report.get("sqlite_wal_reset_fixed") is library["fixed"]
     assert len(seen) == 1 and isinstance(seen[0], sqlite3.Connection), seen

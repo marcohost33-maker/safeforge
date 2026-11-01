@@ -111,7 +111,7 @@ def test_parser_rejects_a_line_without_fstype_or_source(bad):
         ("/srv/nfs/a", "nfs4", "network"),
         ("/srv/smb/a", "cifs", "network"),
         ("/data/a", "xfs", "local"),
-        ("/data/lazy/a", "fuse.lazyfs", "local"),  # longest covering mount wins
+        ("/data/lazy/a", "fuse.lazyfs", "unknown"),  # longest covering mount wins; FUSE is not on the allowlist (SF-R42-01)
         ("/mnt/with space/a", "tmpfs", "volatile"),
     ],
 )

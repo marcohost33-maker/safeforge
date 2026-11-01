@@ -19,12 +19,21 @@ Classes, decided per path:
     between all connections, so it does not work across hosts (sqlite.org/wal.html),
     and a network filesystem's fsync semantics are the server's.
 ``local``
-    A filesystem type that was observed and is in neither list (ext4, xfs,
-    btrfs, zfs, apfs, NTFS, FUSE such as LazyFS, ...).
+    An observed type on the allowlist of disk filesystems whose fsync reaches
+    the device (SF-R42-01): Linux ext4, xfs, btrfs, zfs, f2fs; macOS apfs;
+    Windows NTFS on a fixed drive -- and no mount or super option that
+    switches the flush off.
 ``unknown``
     The type could not be observed: no mount table, a malformed one, an
     overlayfs whose upper directory is not visible from this mount namespace
-    (e.g. a container's root), a platform without a source.
+    (e.g. a container's root), a platform without a source. Also an observed
+    type that is not on the allowlist (``reason: fs-type-not-attested``: FUSE
+    such as LazyFS, ext2/ext3, vfat, exFAT, HFS+, ReFS, ...), and an
+    allowlisted one mounted with flushes off (``reason:
+    mountinfo-flush-disabled``, ``option``: ``nobarrier``, ``barrier=0``,
+    f2fs ``fsync_mode=nobarrier``, f2fs ``checkpoint=disable[:...]``).
+    Before SF-R42-01 every type outside the volatile and network lists
+    counted as local.
 
 Only ``local`` counts as a durability prerequisite; ``unknown`` gives False like
 any other missing evidence (R28). Nothing here refuses to open or ingest.
@@ -40,7 +49,9 @@ Windows ``GetVolumePathNameW`` +
 
 Limits: a RAM disk formatted with a disk filesystem (macOS ``hdiutil`` ram://,
 Linux brd/zram + ext4) looks local; a block device's write cache is not
-visible here (README "No power-loss proof").
+visible here (README "No power-loss proof"); neither is a flush switch that is
+not a mount option -- ZFS ``sync=disabled`` is a dataset property, absent from
+mountinfo, and turns fsync into a no-op.
 """
 
 from __future__ import annotations
@@ -81,17 +92,46 @@ NETWORK_TYPES = frozenset(
 _OVERLAY_VOLATILE = frozenset({"volatile", "fsync=volatile"})
 _MAX_OVERLAY_DEPTH = 4
 
+# SF-R42-01: an allowlist, not "everything that is neither volatile nor network".
+# A type earns "local" only if its fsync is known to reach the device; anything
+# else (FUSE such as LazyFS, ext2/ext3, vfat, a type we have never seen) is unknown.
+LOCAL_TYPES_LINUX = frozenset({"ext4", "xfs", "btrfs", "zfs", "f2fs"})
+LOCAL_TYPES_DARWIN = frozenset({"apfs"})
+LOCAL_TYPES_WINDOWS = frozenset({"NTFS"})  # compared upper-cased; ReFS, FAT32, exFAT are not on it
+# Mount/super options that switch the flush off (ext4(5) barrier=0/nobarrier, btrfs(5)
+# nobarrier, xfs before 4.19 nobarrier, f2fs fsync_mode=nobarrier and checkpoint=disable).
+# Checked for every type: a "nobarrier" means no barrier whoever prints it.
+FLUSH_DISABLING_OPTIONS = frozenset({"nobarrier", "barrier=0", "fsync_mode=nobarrier", "checkpoint=disable"})
+
 
 def _info(fstype: str, cls: str, source: str, **extra: str) -> dict:
     return {"fstype": fstype, "class": cls, "source": source, **extra}
 
 
-def _type_class(fstype: str) -> str:
+def _type_class(fstype: str, local_types: frozenset[str]) -> str:
     if fstype in VOLATILE_TYPES:
         return "volatile"
     if fstype in NETWORK_TYPES:
         return "network"
-    return "local"
+    return "local" if fstype in local_types else "unknown"
+
+
+def _flush_disabled(options: frozenset[str]) -> str | None:
+    """The first (sorted) option that switches the flush off, or None. f2fs prints
+    ``checkpoint=disable:<n>`` / ``checkpoint=disable:<n>%`` as well as the bare form."""
+    hits = sorted(o for o in options if o in FLUSH_DISABLING_OPTIONS or o.startswith("checkpoint=disable:"))
+    return hits[0] if hits else None
+
+
+def _linux_leaf(fstype: str, options: frozenset[str]) -> dict:
+    """Class of a non-overlay mount from its type AND its options (SF-R42-01)."""
+    cls = _type_class(fstype, LOCAL_TYPES_LINUX)
+    if cls == "unknown":
+        return _info(fstype, cls, "mountinfo", reason="fs-type-not-attested")
+    option = _flush_disabled(options)
+    if cls == "local" and option is not None:
+        return _info(fstype, "unknown", "mountinfo", reason="mountinfo-flush-disabled", option=option)
+    return _info(fstype, cls, "mountinfo")
 
 
 def _mount_of(path: str, table: dict) -> str | None:
@@ -118,10 +158,10 @@ def classify_linux(path: str, table: dict | None, *, exists: Callable[[str], boo
         if not fstype:
             return _info("", "unknown", "mountinfo-ambiguous")
         if fstype != "overlay":
-            cls = _type_class(fstype)
+            leaf = _linux_leaf(fstype, mount_opts | super_opts)
             if current == path:
-                return _info(fstype, cls, "mountinfo")
-            return _info("overlay", cls, "mountinfo", upper_fstype=fstype)
+                return leaf
+            return {**leaf, "fstype": "overlay", "upper_fstype": fstype}
         if (mount_opts | super_opts) & _OVERLAY_VOLATILE:
             return _info("overlay", "volatile", "mountinfo", overlay="volatile")
         uppers = [o[len("upperdir=") :] for o in super_opts if o.startswith("upperdir=")]
@@ -187,7 +227,10 @@ def classify_darwin(fstype: str, flags: int, same_device: bool) -> dict:
         return _info(fstype if fstype.isascii() else "", "unknown", "statfs-inconsistent")
     if not flags & MNT_LOCAL:
         return _info(fstype, "network", "statfs")
-    return _info(fstype, _type_class(fstype), "statfs")
+    cls = _type_class(fstype, LOCAL_TYPES_DARWIN)
+    if cls == "unknown":
+        return _info(fstype, cls, "statfs", reason="fs-type-not-attested")
+    return _info(fstype, cls, "statfs")
 
 
 DRIVE_REMOTE = 4

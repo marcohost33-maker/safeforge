@@ -233,18 +233,30 @@ def classify_darwin(fstype: str, flags: int, same_device: bool) -> dict:
     return _info(fstype, cls, "statfs")
 
 
+DRIVE_FIXED = 3
 DRIVE_REMOTE = 4
 DRIVE_RAMDISK = 6
 
 
 def classify_windows(fstype: str, drive_type: int) -> dict:
-    """Class from ``GetVolumeInformationW`` / ``GetDriveTypeW``. Pure."""
+    """Class from ``GetVolumeInformationW`` / ``GetDriveTypeW``. Pure.
+
+    SF-R42-02 / SF-R44-01: only ``DRIVE_FIXED`` can be local. ``GetDriveTypeW``
+    also answers 0 (unknown), 1 (no root directory), 2 (removable: USB sticks,
+    SD cards, often FAT/exFAT with the write cache under the user's hand) and
+    5 (CD-ROM) -- none of them proves a fixed disk. SF-R44-02: and only NTFS on
+    it; ReFS, FAT32, exFAT and any other name are unknown until shown otherwise.
+    """
     if drive_type == DRIVE_REMOTE:
         return _info(fstype, "network", "volume-info")
     if drive_type == DRIVE_RAMDISK:
         return _info(fstype, "volatile", "volume-info")
     if not fstype:
         return _info("", "unknown", "volume-info")
+    if drive_type != DRIVE_FIXED:
+        return _info(fstype, "unknown", "volume-info", reason="not-a-fixed-drive")
+    if fstype.upper() not in LOCAL_TYPES_WINDOWS:
+        return _info(fstype, "unknown", "volume-info", reason="fs-type-not-attested")
     return _info(fstype, "local", "volume-info")
 
 

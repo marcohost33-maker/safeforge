@@ -189,10 +189,29 @@ def test_real_windows_volume_is_local(tmp_path):
 
 @pytest.mark.parametrize(
     "fstype, drive, cls",
-    [("NTFS", 3, "local"), ("ReFS", 3, "local"), ("NTFS", 4, "network"), ("FAT32", 6, "volatile"), ("", 3, "unknown")],
+    [
+        ("NTFS", 3, "local"),
+        ("ntfs", 3, "local"),
+        ("ReFS", 3, "unknown"),  # SF-R44-02: not on the allowlist (was "local" until R42)
+        ("FAT32", 3, "unknown"),
+        ("exFAT", 3, "unknown"),
+        ("VendorFS", 3, "unknown"),
+        ("NTFS", 0, "unknown"),  # SF-R42-02: DRIVE_UNKNOWN
+        ("NTFS", 1, "unknown"),  # DRIVE_NO_ROOT_DIR
+        ("NTFS", 2, "unknown"),  # DRIVE_REMOVABLE
+        ("NTFS", 5, "unknown"),  # DRIVE_CDROM
+        ("NTFS", 7, "unknown"),  # not a documented value
+        ("NTFS", -1, "unknown"),
+        ("NTFS", 4, "network"),
+        ("FAT32", 6, "volatile"),
+        ("", 3, "unknown"),
+    ],
 )
 def test_windows_drive_types(fstype, drive, cls):
-    assert classify_windows(fstype, drive)["class"] == cls
+    info = classify_windows(fstype, drive)
+    assert info["class"] == cls
+    if cls == "unknown" and fstype:
+        assert info["reason"] == ("not-a-fixed-drive" if drive != 3 else "fs-type-not-attested")
 
 
 @pytest.mark.parametrize(

@@ -20,7 +20,7 @@ import io
 import pytest
 
 from safeforge import ObjectStore, durable, filesystems, mounts
-from safeforge.filesystems import classify_darwin, classify_linux
+from safeforge.filesystems import classify_darwin, classify_linux, classify_windows
 
 
 def _table(fstype: str, mount_opts: str = "rw,relatime", super_opts: str = "rw", *, upper: bool = False):
@@ -166,3 +166,25 @@ def test_store_flag_follows_the_mount_options(tmp_path, linux_view, fstype, supe
     assert (r.file_sync, r.dir_sync, r.staging_sync) == ("ok", "ok", "ok")
     assert r.durability_prerequisites_ok is flag, (s.layout_filesystems, r)
     assert r.filesystem_class == ("local" if flag else "unknown")
+
+
+# -- Windows (SF-R42-02, SF-R44-01/02): only NTFS on a fixed drive --------------------------
+
+
+@pytest.mark.parametrize(
+    "fstype, drive, flag",
+    [
+        ("NTFS", filesystems.DRIVE_FIXED, True),  # positive control, same harness
+        ("NTFS", 2, False),  # removable
+        ("NTFS", 0, False),  # unknown drive type
+        ("ReFS", filesystems.DRIVE_FIXED, False),
+        ("exFAT", filesystems.DRIVE_FIXED, False),
+    ],
+)
+def test_store_flag_follows_the_windows_volume(tmp_path, monkeypatch, fstype, drive, flag):
+    monkeypatch.setattr(durable, "fsync_dir", lambda d: "ok")
+    monkeypatch.setattr(durable, "fsync_file", lambda fh: (fh.flush(), "ok")[1])
+    monkeypatch.setattr(filesystems, "filesystems", lambda paths, **kw: {p: classify_windows(fstype, drive) for p in paths})
+    with ObjectStore(str(tmp_path / "root")) as s:
+        r = s.ingest(io.BytesIO(b"r42 windows"), max_bytes=100)
+    assert r.durability_prerequisites_ok is flag, (s.layout_filesystems, r)

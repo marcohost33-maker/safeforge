@@ -43,6 +43,7 @@ import stat
 import sys
 import time
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import BinaryIO
 
@@ -156,7 +157,9 @@ class IngestResult:
     # SF-R41-01: the class of the filesystems holding root/, objects/, staging/ and the database
     # (``ObjectStore.filesystem_class``, :mod:`safeforge.filesystems`): "local", "volatile" (tmpfs,
     # ramfs, overlayfs volatile or on tmpfs), "network" or "unknown". Only "local" lets the flag
-    # be True. Empty on a deduplicated result.
+    # be True. Empty on a deduplicated result. SF-R43-TOCTOU: observed again after this ingest's
+    # status COMMIT; differs from ``ObjectStore.filesystem_class`` (the class at open) when the
+    # mounts or the layout paths changed in between -- then never "local".
     filesystem_class: str = ""
 
     @property
@@ -249,6 +252,15 @@ def _file_matches(path: str, sha256: str, size: int) -> bool:
             )
     except (OSError, ValueError):
         return False
+
+
+def _layout_identity(paths: Iterable[str]) -> tuple[tuple[str, str, int, int], ...]:
+    """``(path, realpath, st_dev, st_ino)`` per layout path (SF-R43-TOCTOU). Raises OSError."""
+    out = []
+    for path in paths:
+        st = os.stat(path)
+        out.append((path, os.path.realpath(path), st.st_dev, st.st_ino))
+    return tuple(out)
 
 
 def _missing_dirs(path: str) -> list[str]:
@@ -512,10 +524,15 @@ class ObjectStore:
             # into a local directory) is a mount point of its own (Codex on d4681e4).
             # The directory stays for the -wal/-shm sidecars SQLite creates next to it.
             db_file = os.path.realpath(_kernel_entry(self.db_path))
-            self.layout_filesystems = filesystems.filesystems(
-                [root, self.objects_dir, self.staging_dir, os.path.dirname(db_file), db_file]
-            )
+            self._layout_paths = (root, self.objects_dir, self.staging_dir, os.path.dirname(db_file), db_file)
+            self.layout_filesystems = filesystems.filesystems(self._layout_paths)
             self.filesystem_class = filesystems.aggregate(self.layout_filesystems.values())
+            # SF-R43-TOCTOU: what ingest() compares against after each status COMMIT.
+            # Not observable -> None, which never matches: the flag stays False, open goes on.
+            try:
+                self._layout_identity: tuple | None = _layout_identity(self._layout_paths)
+            except OSError:
+                self._layout_identity = None
 
         except BaseException:
             if hasattr(self, "_conn"):
@@ -788,6 +805,7 @@ class ObjectStore:
         # computation after the COMMIT: nothing here can turn a committed ingest
         # into a reported failure.
         layout_ok = bool(self.layout_sync) and all(s == "ok" for s in self.layout_sync.values())
+        fs_class = self._filesystem_class_after_commit()
         durable_ack = (
             committed_here
             and policy_at_commit
@@ -795,7 +813,7 @@ class ObjectStore:
             and layout_ok
             and fsync_status == dsync == ssync == "ok"
             and self.sqlite_runtime.get("fixed") is True
-            and self.filesystem_class == "local"
+            and fs_class == "local"
         )
         return IngestResult(
             oid,
@@ -810,8 +828,33 @@ class ObjectStore:
             layout_mount_basis=self.layout_mount_basis,
             sqlite_version=str(self.sqlite_runtime.get("version", "")),
             sqlite_wal_reset_fixed=self.sqlite_runtime.get("fixed") is True,
-            filesystem_class=self.filesystem_class,
+            filesystem_class=fs_class,
         )
+
+    def _filesystem_class_after_commit(self) -> str:
+        """SF-R43-TOCTOU: the layout's filesystem class, observed again after the status COMMIT.
+
+        The constructor classifies once; a remount (``nobarrier``), a mount over a
+        layout directory, or a path that now resolves elsewhere between open and
+        this ACK would otherwise be reported with the class seen at open. Re-reads
+        the class (mountinfo on Linux) and ``(realpath, st_dev, st_ino)`` of every
+        layout path and compares both with the constructor's. Any difference, and
+        any error, withholds "local": the worse new class if there is one, else
+        ``"unknown"``. Never raises -- the ingest is already committed. Skipped
+        when the store was not local at open (nothing to withhold). An observation
+        just after the COMMIT, not a lock: a change after it is not seen.
+        """
+        if self.filesystem_class != "local":
+            return self.filesystem_class
+        try:
+            now = filesystems.filesystems(self._layout_paths)
+            same = now == self.layout_filesystems and _layout_identity(self._layout_paths) == self._layout_identity
+            cls = filesystems.aggregate(now.values())
+        except Exception:  # an observation failure is missing evidence, not a failed ingest
+            return "unknown"
+        if same:
+            return cls
+        return "unknown" if cls == "local" else cls
 
     def _dedup(self, hit: tuple[str, str, str, int], digest: str | None) -> IngestResult:
         oid, status, sha, size = hit

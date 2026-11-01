@@ -73,6 +73,7 @@ def _layout(monkeypatch, root: str, make_probe):
         return dict(s.layout_sync), r
 
 
+@pytest.mark.usefixtures("injected_local_filesystem")  # subject: the walk basis; keeps the True branch reachable
 def test_st_dev_only_walk_syncs_a_superset_of_a_mount_aware_walk(tmp_path, monkeypatch):
     outer = tmp_path / "outer"
     root = outer / "a" / "root"

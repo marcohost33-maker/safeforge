@@ -17,6 +17,10 @@ import pytest
 
 from safeforge import ObjectStore, durable
 
+# The subject is the sync statuses and the SQLite policy, not the filesystem class: injected
+# local (tests/conftest.py; the CI runner's root disk is nobarrier, so tmp_path is unknown there).
+pytestmark = pytest.mark.usefixtures("injected_local_filesystem")
+
 DEGRADED = "degraded:darwin-F_FULLFSYNC-refused-fsync-only"
 
 

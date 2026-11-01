@@ -61,6 +61,29 @@ def _clear_failpoints():
     _faults.set_hook(None)
 
 
+INJECTED_LOCAL = {"fstype": "ext4", "class": "local", "source": "test-injected"}
+
+
+@pytest.fixture
+def injected_local_filesystem(monkeypatch):
+    """Test seam: every layout path is classified ``local`` (``source: "test-injected"``).
+
+    For tests whose subject is ANOTHER durability prerequisite (syncs, SQLite
+    policy/library, the ancestor walk): their result must not depend on the
+    filesystem under tmp_path. The GitHub-hosted ubuntu-24.04 root disk is
+    mounted ``nobarrier`` (observed 2026-11-01, CI mounts job 125000197175), so
+    tmp_path there is ``unknown`` since SF-R42-01. A test that needs a REAL local
+    filesystem runs in the CI job ``mounts`` on ``$RUNNER_TEMP/mnt/ext4-barrier``.
+    Requested by name (usefixtures), never autouse.
+    """
+    from safeforge import filesystems
+
+    def local(paths, **kw):
+        return {p: dict(INJECTED_LOCAL) for p in paths}
+
+    monkeypatch.setattr(filesystems, "filesystems", local)
+
+
 def run_powerloss(root: str, point: str, mutant: str, trace: str, nbytes: int = 65536):
     """Run tests.powerloss_driver in a child. Returns (returncode, acked_id|None, stderr)."""
     args = [sys.executable, "-m", "tests.powerloss_driver", root, point, mutant, trace, str(nbytes)]

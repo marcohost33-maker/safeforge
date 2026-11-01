@@ -306,18 +306,22 @@ requires_matrix = pytest.mark.skipif(not MATRIX, reason="set SAFEFORGE_MOUNT_MAT
 @pytest.mark.parametrize(
     "sub, fstype, cls, flag",
     [
-        ("disk/outer/bind", "ext4", "local", True),
+        # disk/ is on the runner's root disk: GitHub-hosted ubuntu-24.04 mounts /dev/root
+        # nobarrier (observed 2026-11-01, mounts job 125000197175) -> unknown, not local.
+        ("disk/outer/bind", "ext4", "unknown", False),
         ("tmpfs", "tmpfs", "volatile", False),
-        ("ovl-disk/merged", "overlay", "local", True),
+        ("ovl-disk/merged", "overlay", "unknown", False),
         ("ovl-tmpfs/merged", "overlay", "volatile", False),
         ("ovl-volatile/merged", "overlay", "volatile", False),
         ("ext4-barrier", "ext4", "local", True),  # SF-R42-03 positive control: loop ext4, barriers on
         ("ext4-nobarrier", "ext4", "unknown", False),  # SF-R42-03 negative control: same, nobarrier
+        ("ext4-barrier/outer/bind", "ext4", "local", True),  # bind mount positive control on the barrier loop
+        ("ovl-ext4/merged", "overlay", "local", True),  # overlay positive control, upper on the barrier loop
     ],
 )
 def test_required_real_mount_classes(sub, fstype, cls, flag):
     base = os.path.join(MATRIX, sub)
-    assert os.path.ismount(base) or sub.startswith("disk/"), base  # bind mounts share st_dev; ismount cannot see them
+    assert os.path.ismount(base) or sub.endswith("outer/bind"), base  # bind mounts share st_dev; ismount cannot see them
     s, r = _ingest(os.path.join(base, "store", "root"))
     info = s.layout_filesystems
     assert {v["fstype"] for v in info.values()} == {fstype}, info
@@ -334,6 +338,16 @@ def test_required_real_nobarrier_mount_names_the_option():
     _fstype, mount_opts, super_opts = table[point]
     assert "nobarrier" in mount_opts | super_opts, table[point]
     s, _r = _ingest(os.path.join(base, "store", "root"))
+    reasons = {(v.get("reason"), v.get("option")) for v in s.layout_filesystems.values()}
+    assert reasons == {("mountinfo-flush-disabled", "nobarrier")}, s.layout_filesystems
+
+
+@requires_matrix
+@pytest.mark.parametrize("sub", ["disk/outer/bind", "ovl-disk/merged"])
+def test_required_runner_root_disk_is_withheld_for_nobarrier(sub):
+    """The runner fact behind the two "unknown" rows above, read from the live kernel:
+    /dev/root carries nobarrier, and the classifier names it (also through the overlay)."""
+    s, _r = _ingest(os.path.join(MATRIX, sub, "store", "root"))
     reasons = {(v.get("reason"), v.get("option")) for v in s.layout_filesystems.values()}
     assert reasons == {("mountinfo-flush-disabled", "nobarrier")}, s.layout_filesystems
 

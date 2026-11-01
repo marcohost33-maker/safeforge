@@ -59,7 +59,9 @@ def test_positive_control_unchanged_layout_is_durable(tmp_path, view):
     assert (second.filesystem_class, second.durability_prerequisites_ok) == ("local", True)
 
 
-@pytest.mark.parametrize("table, cls", [(TMPFS_OVER, "volatile"), (NOBARRIER, "unknown")])
+@pytest.mark.parametrize(
+    "table, cls", [(TMPFS_OVER, "volatile"), (NOBARRIER, "unknown")], ids=["tmpfs-over", "remount-nobarrier"]
+)
 def test_mount_table_swapped_between_open_and_ingest(tmp_path, view, table, cls):
     with ObjectStore(str(tmp_path / "root")) as s:
         view["table"] = table

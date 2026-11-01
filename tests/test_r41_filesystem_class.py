@@ -311,6 +311,8 @@ requires_matrix = pytest.mark.skipif(not MATRIX, reason="set SAFEFORGE_MOUNT_MAT
         ("ovl-disk/merged", "overlay", "local", True),
         ("ovl-tmpfs/merged", "overlay", "volatile", False),
         ("ovl-volatile/merged", "overlay", "volatile", False),
+        ("ext4-barrier", "ext4", "local", True),  # SF-R42-03 positive control: loop ext4, barriers on
+        ("ext4-nobarrier", "ext4", "unknown", False),  # SF-R42-03 negative control: same, nobarrier
     ],
 )
 def test_required_real_mount_classes(sub, fstype, cls, flag):
@@ -320,6 +322,20 @@ def test_required_real_mount_classes(sub, fstype, cls, flag):
     info = s.layout_filesystems
     assert {v["fstype"] for v in info.values()} == {fstype}, info
     assert (r.filesystem_class, r.durability_prerequisites_ok) == (cls, flag), (info, r)
+
+
+@requires_matrix
+def test_required_real_nobarrier_mount_names_the_option():
+    """SF-R42-03: the live kernel prints the switch where the classifier reads it."""
+    base = os.path.join(MATRIX, "ext4-nobarrier")
+    table = mounts.parse_mountinfo_filesystems(mounts._read_mountinfo())
+    point = os.path.realpath(base)
+    assert table is not None and point in table, point
+    _fstype, mount_opts, super_opts = table[point]
+    assert "nobarrier" in mount_opts | super_opts, table[point]
+    s, _r = _ingest(os.path.join(base, "store", "root"))
+    reasons = {(v.get("reason"), v.get("option")) for v in s.layout_filesystems.values()}
+    assert reasons == {("mountinfo-flush-disabled", "nobarrier")}, s.layout_filesystems
 
 
 @requires_matrix

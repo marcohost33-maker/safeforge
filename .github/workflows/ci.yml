@@ -128,8 +128,11 @@ jobs:
 
   # Real kernel mounts (R15, SF-R41-01): a same-device bind mount (st_dev cannot
   # see it, mountinfo can), tmpfs, and overlayfs with its upper directory on disk,
-  # on tmpfs, and mounted volatile. Mounted with sudo; the tests run unprivileged
-  # and SAFEFORGE_MOUNT_MATRIX makes them mandatory.
+  # on tmpfs, and mounted volatile; SF-R42-03: a loop-mounted ext4 with barriers
+  # on (positive control, flag True) and the same mounted nobarrier (negative
+  # control, class unknown, flag False). Mounted with sudo; the tests run
+  # unprivileged and SAFEFORGE_MOUNT_MATRIX makes them mandatory. The pure
+  # mountinfo fixtures (tests/test_r42_flush_classification.py) run on every runner.
   mounts:
     runs-on: ubuntu-latest
     timeout-minutes: 15

@@ -59,8 +59,12 @@ TABLE = "\n".join(
 EXISTING = {"/data/up", "/dev/shm/up", "/data/up3", "/data/up4", "/ovl/ram/up2", "/ovl/self/u"}
 
 
+def _barrier(point: str) -> frozenset[str]:
+    return frozenset({"rw", "barrier"})
+
+
 def _cls(path: str, exists=EXISTING.__contains__) -> dict:
-    return classify_linux(path, mounts.parse_mountinfo_filesystems(TABLE), exists=exists)
+    return classify_linux(path, mounts.parse_mountinfo_filesystems(TABLE), exists=exists, ext4_options=_barrier)
 
 
 # -- parser ---------------------------------------------------------------------
@@ -412,4 +416,4 @@ def test_a_database_file_bind_mounted_from_tmpfs_is_volatile(tmp_path, monkeypat
 def test_classify_linux_sees_a_file_bind_mount():
     tab = mounts.parse_mountinfo_filesystems(TABLE + "\n70 22 0:26 /db /srv/store/meta.db rw - tmpfs tmpfs rw")
     assert classify_linux("/srv/store/meta.db", tab)["class"] == "volatile"
-    assert classify_linux("/srv/store", tab)["class"] == "local"  # the directory alone hides it
+    assert classify_linux("/srv/store", tab, ext4_options=_barrier)["class"] == "local"  # the directory alone hides it

@@ -30,6 +30,11 @@ although the module's own docstring said its flush switch cannot be seen.
   `nobarrier`. ext4 is now local only if that file says `barrier`; else `unknown`
   with `reason: "superblock-flush-disabled"` or `"ext4-options-unavailable"`
   (no sysfs entry for the device or an unreadable file, e.g. some sandboxes).
+- **Fixed SF-R46-01 (007acc2 cross-family, source review)**: `classify_linux` is
+  public, and a direct call without `ext4_options` skipped the check, so a plain
+  ext4 table gave `local`. It now gives `unknown` with
+  `reason: "ext4-options-unavailable"`. `filesystems()` always passed the source,
+  so the store path is unchanged.
 - **Fixed SF-R45-03**: f2fs `disable_roll_forward` withholds the class: at mount,
   `fs/f2fs/super.c` runs "recover fsynced data" only without it (source read,
   no f2fs run).

@@ -41,7 +41,7 @@ def view(monkeypatch):
         if state.get("raise_on") == state["calls"]:
             raise RuntimeError("probe broke")
         table = mounts.parse_mountinfo_filesystems(state["table"])
-        return {p: classify_linux("/data/store", table) for p in paths}
+        return {p: classify_linux("/data/store", table, ext4_options=lambda point: frozenset({"rw", "barrier"})) for p in paths}
 
     monkeypatch.setattr(filesystems, "filesystems", fake)
     return state

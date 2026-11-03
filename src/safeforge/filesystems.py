@@ -152,6 +152,7 @@ def _linux_leaf(fstype: str, options: frozenset[str], in_force: Callable[[], fro
 
     ``in_force`` yields ext4's complete option list (SF-R45-02), None if unreadable;
     the barrier must be attested by name, its absence is not evidence of a barrier.
+    No ``in_force`` at all attests as little as an unreadable file (SF-R46-01).
     """
     cls = _type_class(fstype, LOCAL_TYPES_LINUX)
     if cls == "unknown":
@@ -159,8 +160,8 @@ def _linux_leaf(fstype: str, options: frozenset[str], in_force: Callable[[], fro
     option = _flush_disabled(options)
     if cls == "local" and option is not None:
         return _info(fstype, "unknown", "mountinfo", reason="mountinfo-flush-disabled", option=option)
-    if cls == "local" and fstype == "ext4" and in_force is not None:
-        attested = in_force()
+    if cls == "local" and fstype == "ext4":
+        attested = None if in_force is None else in_force()
         if attested is not None and "nobarrier" in attested:
             return _info(fstype, "unknown", "proc-fs-ext4", reason="superblock-flush-disabled", option="nobarrier")
         if attested is None or "barrier" not in attested:
@@ -188,7 +189,8 @@ def classify_linux(
     """Class of the filesystem holding ``path`` (an absolute, resolved path) from a parsed mount table. Pure.
 
     ``ext4_options(mount point)``: what the kernel says is in force on that mount.
-    Without it the answer is the table's alone; :func:`filesystems` always passes it.
+    Without it ext4 is ``unknown`` (``reason: ext4-options-unavailable``), because the
+    table cannot show a superblock ``nobarrier``; :func:`filesystems` always passes it.
     """
     if table is None:
         return _info("", "unknown", "mountinfo-unavailable")

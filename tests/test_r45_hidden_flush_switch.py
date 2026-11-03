@@ -167,6 +167,34 @@ def test_visible_nobarrier_keeps_its_reason_and_needs_no_second_source():
     assert (info["reason"], info["option"]) == ("mountinfo-flush-disabled", "nobarrier")
 
 
+# -- SF-R46-01: a direct call without the source attests nothing -------------------------------
+
+
+def test_ext4_without_a_source_is_not_local():
+    assert classify_linux("/data/store", _table("ext4")) == {
+        "fstype": "ext4",
+        "class": "unknown",
+        "source": "proc-fs-ext4",
+        "reason": "ext4-options-unavailable",
+    }
+
+
+def test_ext4_upper_of_an_overlay_without_a_source_is_not_local():
+    info = classify_linux("/merged/store", _table("ext4", upper=True), exists=lambda p: p == "/data/up")
+    assert (info["upper_fstype"], info["class"], info.get("reason")) == ("ext4", "unknown", "ext4-options-unavailable")
+
+
+def test_ext4_with_the_source_attesting_a_barrier_is_local_on_the_same_table():
+    """Positive control for the two tests above: only the source differs."""
+    assert classify_linux("/data/store", _table("ext4"), ext4_options=lambda point: ATTESTED)["class"] == "local"
+
+
+@pytest.mark.parametrize("fstype", ["xfs", "btrfs", "f2fs"])
+def test_no_source_does_not_touch_other_allowlisted_types(fstype):
+    """Negative control: the guard must not withhold local from every type."""
+    assert classify_linux("/data/store", _table(fstype))["class"] == "local"
+
+
 @pytest.mark.parametrize("fstype", ["xfs", "btrfs", "f2fs"])
 def test_other_allowlisted_types_do_not_depend_on_the_ext4_source(fstype):
     info = classify_linux("/data/store", _table(fstype), ext4_options=lambda point: None)
@@ -195,10 +223,11 @@ def _wired(path, by_device):
 
 
 def test_measured_mountinfo_cannot_tell_the_two_mounts_apart():
-    """The fails-before fact: without the second source both are the same local ext4."""
+    """The fact behind SF-R45-02: the table alone cannot separate them, so it attests neither."""
     table = mounts.parse_mountinfo_filesystems(MEASURED_MOUNTINFO)
     assert table["/m/barrier"] == table["/m/sb-nobarrier"]
     assert classify_linux("/m/barrier/s", table) == classify_linux("/m/sb-nobarrier/s", table)
+    assert classify_linux("/m/barrier/s", table)["class"] == "unknown"
 
 
 def test_filesystems_wires_the_device_of_the_mount_to_the_source(linux_paths):

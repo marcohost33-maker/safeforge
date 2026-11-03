@@ -49,6 +49,10 @@ FLUSH_OFF = [
 ]
 
 
+def _barrier(point: str) -> frozenset[str]:
+    return frozenset({"rw", "barrier"})
+
+
 @pytest.mark.parametrize("fstype, option", FLUSH_OFF)
 @pytest.mark.parametrize("where", ["super", "mount"])
 def test_flush_disabling_option_is_not_local(fstype, option, where):
@@ -80,7 +84,7 @@ def test_flush_disabling_option_is_not_local(fstype, option, where):
     ],
 )
 def test_positive_control_allowlisted_types_with_flushes_on_stay_local(fstype, opts):
-    info = classify_linux("/data/store", _table(fstype, super_opts=opts))
+    info = classify_linux("/data/store", _table(fstype, super_opts=opts), ext4_options=_barrier)
     assert info == {"fstype": fstype, "class": "local", "source": "mountinfo"}
 
 
@@ -118,7 +122,7 @@ def test_overlay_upper_on_an_unattested_type_is_unknown():
 
 
 def test_overlay_positive_control_upper_on_ext4_stays_local():
-    info = classify_linux("/merged/store", _table("ext4", upper=True), exists=lambda p: p == "/data/up")
+    info = classify_linux("/merged/store", _table("ext4", upper=True), exists=lambda p: p == "/data/up", ext4_options=_barrier)
     assert (info["upper_fstype"], info["class"]) == ("ext4", "local")
     assert "reason" not in info
 
@@ -141,7 +145,7 @@ def linux_view(monkeypatch):
     state = {}
 
     def view(paths, **kw):
-        return {p: classify_linux("/data/store", state["table"]) for p in paths}
+        return {p: classify_linux("/data/store", state["table"], ext4_options=_barrier) for p in paths}
 
     monkeypatch.setattr(filesystems, "filesystems", view)
     return state

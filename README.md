@@ -63,11 +63,16 @@ CHANGELOG); nothing here has been audited externally, and there is no release.
   `network`, and an unobservable type (e.g. a container's root overlay,
   whose upper directory lies outside its mount namespace) as `unknown` --
   never on Windows. `local` is an allowlist (SF-R42-01): Linux ext4, xfs,
-  btrfs, zfs, f2fs; macOS apfs; Windows NTFS on a fixed drive. Any other
-  type (FUSE such as LazyFS, ext3, vfat, exFAT, HFS+, ReFS, removable or
-  CD-ROM drives) is `unknown`, and so is an allowlisted one mounted with
-  flushes off (`nobarrier`, `barrier=0`, f2fs `fsync_mode=nobarrier` or
-  `checkpoint=disable`). The class is observed again after each status
+  btrfs, f2fs; macOS apfs; Windows NTFS on a fixed drive. Any other type
+  (FUSE such as LazyFS, ext3, vfat, exFAT, HFS+, ReFS, removable or CD-ROM
+  drives) is `unknown`, and so is an allowlisted one mounted with flushes off
+  (`nobarrier`, `barrier=0`, f2fs `fsync_mode=nobarrier`, `checkpoint=disable`
+  or `disable_roll_forward`). **ZFS is `unknown`** (SF-R45-01): `sync=disabled`
+  is a dataset property that mountinfo cannot show, so a safe dataset and an
+  unsafe one look the same; open and ingest work as before, only the claim is
+  withheld. ext4 needs `barrier` in `/proc/fs/ext4/<dev>/options`
+  (SF-R45-02), because a superblock default of `nobarrier` is not in
+  mountinfo either. The class is observed again after each status
   COMMIT (SF-R43-TOCTOU): a remount or a layout path that changed since open
   withholds the claim for that ingest. An ACK is a
   logical ACK; read that field for the power-cut claim. It reports software
@@ -122,9 +127,8 @@ CHANGELOG); nothing here has been audited externally, and there is no release.
 - **One host.** SQLite WAL does not work on network filesystems; a store on
   one is reported `filesystem_class: "network"` and never claims durability.
   A RAM disk formatted with a disk filesystem (zram + ext4, macOS `ram://`)
-  looks local: only the filesystem type is observed, not the device. ZFS
-  `sync=disabled` (a dataset property, not a mount option) is not visible
-  either.
+  looks local: only the filesystem is observed, not the device, so a drive
+  or hypervisor that ignores flushes is not visible either.
 
 ## Use
 

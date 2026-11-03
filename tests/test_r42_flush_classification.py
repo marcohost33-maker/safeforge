@@ -73,7 +73,6 @@ def test_flush_disabling_option_is_not_local(fstype, option, where):
         ("ext4", "rw,data=writeback,commit=60"),  # not a flush switch: fsync still flushes
         ("xfs", "rw,attr2,inode64,noquota"),
         ("btrfs", "rw,ssd,space_cache=v2,subvolid=5,subvol=/"),
-        ("zfs", "rw,xattr,noacl"),
         ("f2fs", "rw,fsync_mode=posix"),
         ("f2fs", "rw,fsync_mode=strict"),
         ("f2fs", "rw,checkpoint=enable"),
@@ -87,7 +86,7 @@ def test_positive_control_allowlisted_types_with_flushes_on_stay_local(fstype, o
 
 @pytest.mark.parametrize(
     "fstype",
-    ["fuse.lazyfs", "fuse", "fuseblk", "ext3", "ext2", "vfat", "exfat", "ntfs3", "squashfs", "proc", "bcachefs", "zzfs"],
+    ["fuse.lazyfs", "fuse", "fuseblk", "ext3", "ext2", "vfat", "exfat", "ntfs3", "squashfs", "proc", "bcachefs", "zfs", "zzfs"],
 )
 def test_types_not_on_the_allowlist_are_unknown(fstype):
     info = classify_linux("/data/store", _table(fstype))

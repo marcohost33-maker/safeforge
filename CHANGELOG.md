@@ -6,6 +6,36 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### R45 (2026-11-03): a flush switch the source cannot show withholds local
+
+007acc2 cross-family R28/R31/R36 (GPT-6) on 3cfcacd: ZFS stayed on the allowlist
+although the module's own docstring said its flush switch cannot be seen.
+
+- **Fixed SF-R45-01 (P1)**: `zfs` is off the Linux allowlist. `sync=disabled`
+  is a dataset property, absent from mountinfo, and fsync then returns before
+  the data is on stable storage (OpenZFS zfsprops(7)); a dataset with
+  `sync=standard` looks the same. Also through an overlay upper, and a table
+  that claims `sync=standard` attests nothing.
+- **Fixed SF-R45-02 (variant search, measured)**: `tune2fs -o nobarrier` and
+  `tune2fs -E mount_opts=nobarrier` set ext4's superblock default, and mountinfo
+  prints only what differs from it. On kernel 6.6.87.2 such a loop mount reads
+  `rw,relatime - ext4 /dev/loop1 rw` while `/proc/fs/ext4/loop1/options` says
+  `nobarrier`. ext4 is now local only if that file says `barrier`; else `unknown`
+  with `reason: "superblock-flush-disabled"` or `"ext4-options-unavailable"`
+  (no sysfs entry for the device or an unreadable file, e.g. some sandboxes).
+- **Fixed SF-R45-03**: f2fs `disable_roll_forward` withholds the class. f2fs fsync
+  writes no checkpoint and relies on roll-forward recovery at the next mount.
+- **Behaviour change (API)**: every ZFS store, including one with `sync=standard`
+  or `always`, now reports `filesystem_class == "unknown"` and
+  `durability_prerequisites_ok = False`, because the two cannot be told apart
+  from here. Open and ingest are unchanged. This is a claim withheld, not a
+  finding about any ZFS system: no ZFS kernel run backs this change. Restoring
+  it needs a source that attests the effective `sync` property for the path.
+- **Not visible, unchanged**: device write caches, flushes dropped below the
+  filesystem, process-level fsync overrides (README "No power-loss proof").
+- **Tests**: `tests/test_r45_hidden_flush_switch.py`; the CI job `mounts` gets a
+  loop-mounted ext4 with `tune2fs -o nobarrier` as a real negative control.
+
 ### R42/R43 (2026-11-01): local is an allowlist, flush switches count, the class is re-checked at ACK
 
 Issue #7; 007acc2 cross-family R42/R43/R44 (GPT-6), triaged against 066cbdf.

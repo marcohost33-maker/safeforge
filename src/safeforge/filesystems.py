@@ -20,20 +20,22 @@ Classes, decided per path:
     and a network filesystem's fsync semantics are the server's.
 ``local``
     An observed type on the allowlist of disk filesystems whose fsync reaches
-    the device (SF-R42-01): Linux ext4, xfs, btrfs, zfs, f2fs; macOS apfs;
-    Windows NTFS on a fixed drive -- and no mount or super option that
-    switches the flush off.
+    the device (SF-R42-01): Linux ext4, xfs, btrfs, f2fs; macOS apfs; Windows
+    NTFS on a fixed drive -- and no mount or super option that switches the
+    flush off, and on ext4 ``barrier`` attested by the kernel (SF-R45-02).
 ``unknown``
     The type could not be observed: no mount table, a malformed one, an
     overlayfs whose upper directory is not visible from this mount namespace
     (e.g. a container's root), a platform without a source. Also an observed
     type that is not on the allowlist (``reason: fs-type-not-attested``: FUSE
-    such as LazyFS, ext2/ext3, vfat, exFAT, HFS+, ReFS, ...), and an
-    allowlisted one mounted with flushes off (``reason:
+    such as LazyFS, ext2/ext3, vfat, exFAT, HFS+, ReFS, and ZFS, see below,
+    ...), and an allowlisted one mounted with flushes off (``reason:
     mountinfo-flush-disabled``, ``option``: ``nobarrier``, ``barrier=0``,
-    f2fs ``fsync_mode=nobarrier``, f2fs ``checkpoint=disable[:...]``).
-    Before SF-R42-01 every type outside the volatile and network lists
-    counted as local.
+    f2fs ``fsync_mode=nobarrier``, f2fs ``checkpoint=disable[:...]``, f2fs
+    ``disable_roll_forward``). ext4 whose superblock default turns barriers
+    off (``reason: superblock-flush-disabled``) or whose in-force options
+    cannot be read (``reason: ext4-options-unavailable``). Before SF-R42-01
+    every type outside the volatile and network lists counted as local.
 
 Only ``local`` counts as a durability prerequisite; ``unknown`` gives False like
 any other missing evidence (R28). Nothing here refuses to open or ingest.
@@ -48,11 +50,26 @@ Windows ``GetVolumePathNameW`` +
 ``GetDriveTypeW`` (DRIVE_REMOTE, DRIVE_RAMDISK; only DRIVE_FIXED can be local)
 + ``GetVolumeInformationW``.
 
+A flush switch the source cannot show (SF-R45): ``local`` is a statement about
+what was observed, so a type whose flush depends on a setting outside the
+observed source is not local until that setting can be read.
+
+* ZFS (SF-R45-01): ``sync=disabled`` is a dataset property, inherited, absent
+  from mountinfo, and fsync then returns before the data is on stable storage
+  (zfsprops(7)). A ZFS mount with ``sync=standard`` looks exactly the same, so
+  every ZFS store is ``unknown``. That costs real ZFS users the claim; they get
+  it back only with a source that attests the effective property for the path.
+* ext4 (SF-R45-02): ``tune2fs -o nobarrier`` and ``-E mount_opts=nobarrier`` set
+  the superblock default, and mountinfo prints only what differs from it: such a
+  mount reads ``rw`` (measured on 6.6.87.2). ``/proc/fs/ext4/<dev>/options``
+  prints every option in force, so ext4 is local only if it says ``barrier``.
+
 Limits: a RAM disk formatted with a disk filesystem (macOS ``hdiutil`` ram://,
-Linux brd/zram + ext4) looks local; a block device's write cache is not
-visible here (README "No power-loss proof"); neither is a flush switch that is
-not a mount option -- ZFS ``sync=disabled`` is a dataset property, absent from
-mountinfo, and turns fsync into a no-op.
+Linux brd/zram + ext4) looks local; below the filesystem nothing is visible
+here: a block device's write cache, including one the kernel was told is
+write-through (``queue/write_cache``), Windows "turn off write-cache buffer
+flushing", a hypervisor that ignores flushes (README "No power-loss proof");
+nor is a process-level fsync override such as libeatmydata.
 """
 
 from __future__ import annotations
@@ -61,6 +78,7 @@ import os
 import posixpath
 import sys
 from collections.abc import Callable, Iterable
+from functools import partial
 
 from . import mounts
 
@@ -96,13 +114,18 @@ _MAX_OVERLAY_DEPTH = 4
 # SF-R42-01: an allowlist, not "everything that is neither volatile nor network".
 # A type earns "local" only if its fsync is known to reach the device; anything
 # else (FUSE such as LazyFS, ext2/ext3, vfat, a type we have never seen) is unknown.
-LOCAL_TYPES_LINUX = frozenset({"ext4", "xfs", "btrfs", "zfs", "f2fs"})
+# SF-R45-01: zfs is not on it, its flush hangs on a dataset property mountinfo cannot show.
+LOCAL_TYPES_LINUX = frozenset({"ext4", "xfs", "btrfs", "f2fs"})
 LOCAL_TYPES_DARWIN = frozenset({"apfs"})
 LOCAL_TYPES_WINDOWS = frozenset({"NTFS"})  # compared upper-cased; ReFS, FAT32, exFAT are not on it
 # Mount/super options that switch the flush off (ext4(5) barrier=0/nobarrier, btrfs(5)
-# nobarrier, xfs before 4.19 nobarrier, f2fs fsync_mode=nobarrier and checkpoint=disable).
+# nobarrier, xfs before 4.19 nobarrier, f2fs fsync_mode=nobarrier and checkpoint=disable),
+# or the recovery an acknowledged fsync relies on (f2fs disable_roll_forward: f2fs.rst, its
+# fsync writes no checkpoint and is replayed by roll-forward recovery at the next mount).
 # Checked for every type: a "nobarrier" means no barrier whoever prints it.
-FLUSH_DISABLING_OPTIONS = frozenset({"nobarrier", "barrier=0", "fsync_mode=nobarrier", "checkpoint=disable"})
+FLUSH_DISABLING_OPTIONS = frozenset(
+    {"nobarrier", "barrier=0", "fsync_mode=nobarrier", "checkpoint=disable", "disable_roll_forward"}
+)
 
 
 def _info(fstype: str, cls: str, source: str, **extra: str) -> dict:
@@ -124,14 +147,24 @@ def _flush_disabled(options: frozenset[str]) -> str | None:
     return hits[0] if hits else None
 
 
-def _linux_leaf(fstype: str, options: frozenset[str]) -> dict:
-    """Class of a non-overlay mount from its type AND its options (SF-R42-01)."""
+def _linux_leaf(fstype: str, options: frozenset[str], in_force: Callable[[], frozenset[str] | None] | None) -> dict:
+    """Class of a non-overlay mount from its type AND its options (SF-R42-01).
+
+    ``in_force`` yields ext4's complete option list (SF-R45-02), None if unreadable;
+    the barrier must be attested by name, its absence is not evidence of a barrier.
+    """
     cls = _type_class(fstype, LOCAL_TYPES_LINUX)
     if cls == "unknown":
         return _info(fstype, cls, "mountinfo", reason="fs-type-not-attested")
     option = _flush_disabled(options)
     if cls == "local" and option is not None:
         return _info(fstype, "unknown", "mountinfo", reason="mountinfo-flush-disabled", option=option)
+    if cls == "local" and fstype == "ext4" and in_force is not None:
+        attested = in_force()
+        if attested is not None and "nobarrier" in attested:
+            return _info(fstype, "unknown", "proc-fs-ext4", reason="superblock-flush-disabled", option="nobarrier")
+        if attested is None or "barrier" not in attested:
+            return _info(fstype, "unknown", "proc-fs-ext4", reason="ext4-options-unavailable")
     return _info(fstype, cls, "mountinfo")
 
 
@@ -145,8 +178,18 @@ def _mount_of(path: str, table: dict) -> str | None:
     return best
 
 
-def classify_linux(path: str, table: dict | None, *, exists: Callable[[str], bool] = os.path.isdir) -> dict:
-    """Class of the filesystem holding ``path`` (an absolute, resolved path) from a parsed mount table. Pure."""
+def classify_linux(
+    path: str,
+    table: dict | None,
+    *,
+    exists: Callable[[str], bool] = os.path.isdir,
+    ext4_options: Callable[[str], frozenset[str] | None] | None = None,
+) -> dict:
+    """Class of the filesystem holding ``path`` (an absolute, resolved path) from a parsed mount table. Pure.
+
+    ``ext4_options(mount point)``: what the kernel says is in force on that mount.
+    Without it the answer is the table's alone; :func:`filesystems` always passes it.
+    """
     if table is None:
         return _info("", "unknown", "mountinfo-unavailable")
     seen: set[str] = set()
@@ -159,7 +202,8 @@ def classify_linux(path: str, table: dict | None, *, exists: Callable[[str], boo
         if not fstype:
             return _info("", "unknown", "mountinfo-ambiguous")
         if fstype != "overlay":
-            leaf = _linux_leaf(fstype, mount_opts | super_opts)
+            in_force = None if ext4_options is None else partial(ext4_options, point)
+            leaf = _linux_leaf(fstype, mount_opts | super_opts, in_force)
             if current == path:
                 return leaf
             return {**leaf, "fstype": "overlay", "upper_fstype": fstype}
@@ -284,18 +328,26 @@ def filesystems(
     *,
     platform: str | None = None,
     read_mountinfo: Callable[[], str | None] | None = None,
+    read_ext4_options: Callable[[tuple[int, int]], frozenset[str] | None] | None = None,
 ) -> dict[str, dict]:
     """``{path: {"fstype", "class", "source", ...}}`` for each path (resolved with realpath).
 
-    Linux reads the mount table once for all paths. ``platform`` and
-    ``read_mountinfo`` exist for tests.
+    Linux reads the mount table once for all paths. ``platform``, ``read_mountinfo``
+    and ``read_ext4_options`` exist for tests.
     """
     platform = sys.platform if platform is None else platform
     resolved = {p: os.path.realpath(p) for p in paths}
     if platform.startswith("linux"):
         text = (read_mountinfo or mounts._read_mountinfo)()
         table = mounts.parse_mountinfo_filesystems(text) if text is not None else None
-        return {p: classify_linux(r, table) for p, r in resolved.items()}
+        devices = (mounts.parse_mountinfo_devices(text) or {}) if text is not None else {}
+        read = read_ext4_options or mounts._read_ext4_options
+
+        def ext4_options(point: str) -> frozenset[str] | None:
+            device = devices.get(point)
+            return None if device is None else read(device)
+
+        return {p: classify_linux(r, table, ext4_options=ext4_options) for p, r in resolved.items()}
     if platform == "darwin":
         return {p: _darwin(r) for p, r in resolved.items()}
     if platform == "win32":

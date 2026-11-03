@@ -14,6 +14,8 @@
 #                            positive control of SF-R42-03
 # <base>/ext4-nobarrier      the same image type mounted "nobarrier": flushes off,
 #                            so never local (SF-R42-01 negative control)
+# <base>/ext4-sb-nobarrier   ext4 with tune2fs -o nobarrier, mounted with default
+#                            options: flushes off, mountinfo silent (SF-R45-02)
 # <base>/ext4-barrier/outer/bind  bind mount on the barrier loop (local positive control)
 # <base>/ovl-ext4/merged     overlayfs, upper directory on the barrier loop (local)
 #
@@ -41,15 +43,17 @@ overlay ovl-disk "$base/disk"
 overlay ovl-tmpfs "$base/tmpfs"
 overlay ovl-volatile "$base/disk" volatile
 
-loop_ext4() { # name [mount options]
+loop_ext4() { # name [mount options] [tune2fs -o superblock default]
     truncate -s 64M "$base/$1.img"
     mkfs.ext4 -q -F "$base/$1.img"
+    if [ -n "${3:-}" ]; then tune2fs -o "$3" "$base/$1.img"; fi
     mkdir -p "$base/$1"
     sudo mount -o "loop${2:+,$2}" "$base/$1.img" "$base/$1"
     sudo chown "$me" "$base/$1" # the bind/overlay directories below are created in it
 }
 loop_ext4 ext4-barrier
 loop_ext4 ext4-nobarrier nobarrier
+loop_ext4 ext4-sb-nobarrier "" nobarrier
 
 # GitHub-hosted ubuntu-24.04 mounts its root disk (/dev/root) nobarrier (observed
 # 2026-11-01), so disk/ and ovl-disk/ above are NOT local there. The real local

@@ -315,6 +315,7 @@ requires_matrix = pytest.mark.skipif(not MATRIX, reason="set SAFEFORGE_MOUNT_MAT
         ("ovl-volatile/merged", "overlay", "volatile", False),
         ("ext4-barrier", "ext4", "local", True),  # SF-R42-03 positive control: loop ext4, barriers on
         ("ext4-nobarrier", "ext4", "unknown", False),  # SF-R42-03 negative control: same, nobarrier
+        ("ext4-sb-nobarrier", "ext4", "unknown", False),  # SF-R45-02 negative control: tune2fs -o nobarrier
         ("ext4-barrier/outer/bind", "ext4", "local", True),  # bind mount positive control on the barrier loop
         ("ovl-ext4/merged", "overlay", "local", True),  # overlay positive control, upper on the barrier loop
     ],
@@ -340,6 +341,32 @@ def test_required_real_nobarrier_mount_names_the_option():
     s, _r = _ingest(os.path.join(base, "store", "root"))
     reasons = {(v.get("reason"), v.get("option")) for v in s.layout_filesystems.values()}
     assert reasons == {("mountinfo-flush-disabled", "nobarrier")}, s.layout_filesystems
+
+
+@requires_matrix
+def test_required_real_superblock_nobarrier_is_invisible_in_mountinfo_and_still_withheld():
+    """SF-R45-02 on a live kernel: the switch is not in the mount table, only in /proc/fs/ext4."""
+    base = os.path.join(MATRIX, "ext4-sb-nobarrier")
+    text = mounts._read_mountinfo()
+    table = mounts.parse_mountinfo_filesystems(text)
+    point = os.path.realpath(base)
+    assert table is not None and point in table, point
+    _fstype, mount_opts, super_opts = table[point]
+    assert "nobarrier" not in mount_opts | super_opts, table[point]  # else this would not test the second source
+    in_force = mounts._read_ext4_options(mounts.parse_mountinfo_devices(text)[point])
+    assert in_force is not None and "nobarrier" in in_force, in_force
+    s, _r = _ingest(os.path.join(base, "store", "root"))
+    reasons = {(v.get("reason"), v.get("option")) for v in s.layout_filesystems.values()}
+    assert reasons == {("superblock-flush-disabled", "nobarrier")}, s.layout_filesystems
+
+
+@requires_matrix
+def test_required_real_barrier_is_attested_by_the_kernel():
+    """SF-R45-02 positive control: the same reader on the barrier loop names ``barrier``."""
+    text = mounts._read_mountinfo()
+    point = os.path.realpath(os.path.join(MATRIX, "ext4-barrier"))
+    in_force = mounts._read_ext4_options(mounts.parse_mountinfo_devices(text)[point])
+    assert in_force is not None and "barrier" in in_force and "nobarrier" not in in_force, in_force
 
 
 @requires_matrix

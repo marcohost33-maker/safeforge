@@ -23,8 +23,9 @@ although the module's own docstring said its flush switch cannot be seen.
   `nobarrier`. ext4 is now local only if that file says `barrier`; else `unknown`
   with `reason: "superblock-flush-disabled"` or `"ext4-options-unavailable"`
   (no sysfs entry for the device or an unreadable file, e.g. some sandboxes).
-- **Fixed SF-R45-03**: f2fs `disable_roll_forward` withholds the class. f2fs fsync
-  writes no checkpoint and relies on roll-forward recovery at the next mount.
+- **Fixed SF-R45-03**: f2fs `disable_roll_forward` withholds the class: at mount,
+  `fs/f2fs/super.c` runs "recover fsynced data" only without it (source read,
+  no f2fs run).
 - **Behaviour change (API)**: every ZFS store, including one with `sync=standard`
   or `always`, now reports `filesystem_class == "unknown"` and
   `durability_prerequisites_ok = False`, because the two cannot be told apart

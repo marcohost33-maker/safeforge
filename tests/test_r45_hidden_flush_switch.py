@@ -94,7 +94,7 @@ def test_store_flag_on_zfs_is_false_and_nothing_is_refused(tmp_path, monkeypatch
     assert r.filesystem_class == ("local" if flag else "unknown")
 
 
-# -- f2fs: fsync durability rests on roll-forward recovery (Documentation/filesystems/f2fs.rst) --
+# -- f2fs: fs/f2fs/super.c runs "recover fsynced data" at mount only without this option ---------
 
 
 @pytest.mark.parametrize("where", ["super", "mount"])

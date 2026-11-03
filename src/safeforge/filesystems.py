@@ -120,8 +120,8 @@ LOCAL_TYPES_DARWIN = frozenset({"apfs"})
 LOCAL_TYPES_WINDOWS = frozenset({"NTFS"})  # compared upper-cased; ReFS, FAT32, exFAT are not on it
 # Mount/super options that switch the flush off (ext4(5) barrier=0/nobarrier, btrfs(5)
 # nobarrier, xfs before 4.19 nobarrier, f2fs fsync_mode=nobarrier and checkpoint=disable),
-# or the recovery an acknowledged fsync relies on (f2fs disable_roll_forward: f2fs.rst, its
-# fsync writes no checkpoint and is replayed by roll-forward recovery at the next mount).
+# or the recovery an acknowledged fsync relies on (f2fs disable_roll_forward: fs/f2fs/super.c
+# runs "recover fsynced data" at mount only without it).
 # Checked for every type: a "nobarrier" means no barrier whoever prints it.
 FLUSH_DISABLING_OPTIONS = frozenset(
     {"nobarrier", "barrier=0", "fsync_mode=nobarrier", "checkpoint=disable", "disable_roll_forward"}

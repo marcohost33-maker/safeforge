@@ -59,8 +59,12 @@ TABLE = "\n".join(
 EXISTING = {"/data/up", "/dev/shm/up", "/data/up3", "/data/up4", "/ovl/ram/up2", "/ovl/self/u"}
 
 
+def _barrier(point: str) -> frozenset[str]:
+    return frozenset({"rw", "barrier"})
+
+
 def _cls(path: str, exists=EXISTING.__contains__) -> dict:
-    return classify_linux(path, mounts.parse_mountinfo_filesystems(TABLE), exists=exists)
+    return classify_linux(path, mounts.parse_mountinfo_filesystems(TABLE), exists=exists, ext4_options=_barrier)
 
 
 # -- parser ---------------------------------------------------------------------
@@ -111,7 +115,7 @@ def test_parser_rejects_a_line_without_fstype_or_source(bad):
         ("/srv/nfs/a", "nfs4", "network"),
         ("/srv/smb/a", "cifs", "network"),
         ("/data/a", "xfs", "local"),
-        ("/data/lazy/a", "fuse.lazyfs", "local"),  # longest covering mount wins
+        ("/data/lazy/a", "fuse.lazyfs", "unknown"),  # longest covering mount wins; FUSE is not on the allowlist (SF-R42-01)
         ("/mnt/with space/a", "tmpfs", "volatile"),
     ],
 )
@@ -189,10 +193,29 @@ def test_real_windows_volume_is_local(tmp_path):
 
 @pytest.mark.parametrize(
     "fstype, drive, cls",
-    [("NTFS", 3, "local"), ("ReFS", 3, "local"), ("NTFS", 4, "network"), ("FAT32", 6, "volatile"), ("", 3, "unknown")],
+    [
+        ("NTFS", 3, "local"),
+        ("ntfs", 3, "local"),
+        ("ReFS", 3, "unknown"),  # SF-R44-02: not on the allowlist (was "local" until R42)
+        ("FAT32", 3, "unknown"),
+        ("exFAT", 3, "unknown"),
+        ("VendorFS", 3, "unknown"),
+        ("NTFS", 0, "unknown"),  # SF-R42-02: DRIVE_UNKNOWN
+        ("NTFS", 1, "unknown"),  # DRIVE_NO_ROOT_DIR
+        ("NTFS", 2, "unknown"),  # DRIVE_REMOVABLE
+        ("NTFS", 5, "unknown"),  # DRIVE_CDROM
+        ("NTFS", 7, "unknown"),  # not a documented value
+        ("NTFS", -1, "unknown"),
+        ("NTFS", 4, "network"),
+        ("FAT32", 6, "volatile"),
+        ("", 3, "unknown"),
+    ],
 )
 def test_windows_drive_types(fstype, drive, cls):
-    assert classify_windows(fstype, drive)["class"] == cls
+    info = classify_windows(fstype, drive)
+    assert info["class"] == cls
+    if cls == "unknown" and fstype:
+        assert info["reason"] == ("not-a-fixed-drive" if drive != 3 else "fs-type-not-attested")
 
 
 @pytest.mark.parametrize(
@@ -287,20 +310,77 @@ requires_matrix = pytest.mark.skipif(not MATRIX, reason="set SAFEFORGE_MOUNT_MAT
 @pytest.mark.parametrize(
     "sub, fstype, cls, flag",
     [
-        ("disk/outer/bind", "ext4", "local", True),
+        # disk/ is on the runner's root disk: GitHub-hosted ubuntu-24.04 mounts /dev/root
+        # nobarrier (observed 2026-11-01, mounts job 125000197175) -> unknown, not local.
+        ("disk/outer/bind", "ext4", "unknown", False),
         ("tmpfs", "tmpfs", "volatile", False),
-        ("ovl-disk/merged", "overlay", "local", True),
+        ("ovl-disk/merged", "overlay", "unknown", False),
         ("ovl-tmpfs/merged", "overlay", "volatile", False),
         ("ovl-volatile/merged", "overlay", "volatile", False),
+        ("ext4-barrier", "ext4", "local", True),  # SF-R42-03 positive control: loop ext4, barriers on
+        ("ext4-nobarrier", "ext4", "unknown", False),  # SF-R42-03 negative control: same, nobarrier
+        ("ext4-sb-nobarrier", "ext4", "unknown", False),  # SF-R45-02 negative control: tune2fs -o nobarrier
+        ("ext4-barrier/outer/bind", "ext4", "local", True),  # bind mount positive control on the barrier loop
+        ("ovl-ext4/merged", "overlay", "local", True),  # overlay positive control, upper on the barrier loop
     ],
 )
 def test_required_real_mount_classes(sub, fstype, cls, flag):
     base = os.path.join(MATRIX, sub)
-    assert os.path.ismount(base) or sub.startswith("disk/"), base  # bind mounts share st_dev; ismount cannot see them
+    assert os.path.ismount(base) or sub.endswith("outer/bind"), base  # bind mounts share st_dev; ismount cannot see them
     s, r = _ingest(os.path.join(base, "store", "root"))
     info = s.layout_filesystems
     assert {v["fstype"] for v in info.values()} == {fstype}, info
     assert (r.filesystem_class, r.durability_prerequisites_ok) == (cls, flag), (info, r)
+
+
+@requires_matrix
+def test_required_real_nobarrier_mount_names_the_option():
+    """SF-R42-03: the live kernel prints the switch where the classifier reads it."""
+    base = os.path.join(MATRIX, "ext4-nobarrier")
+    table = mounts.parse_mountinfo_filesystems(mounts._read_mountinfo())
+    point = os.path.realpath(base)
+    assert table is not None and point in table, point
+    _fstype, mount_opts, super_opts = table[point]
+    assert "nobarrier" in mount_opts | super_opts, table[point]
+    s, _r = _ingest(os.path.join(base, "store", "root"))
+    reasons = {(v.get("reason"), v.get("option")) for v in s.layout_filesystems.values()}
+    assert reasons == {("mountinfo-flush-disabled", "nobarrier")}, s.layout_filesystems
+
+
+@requires_matrix
+def test_required_real_superblock_nobarrier_is_invisible_in_mountinfo_and_still_withheld():
+    """SF-R45-02 on a live kernel: the switch is not in the mount table, only in /proc/fs/ext4."""
+    base = os.path.join(MATRIX, "ext4-sb-nobarrier")
+    text = mounts._read_mountinfo()
+    table = mounts.parse_mountinfo_filesystems(text)
+    point = os.path.realpath(base)
+    assert table is not None and point in table, point
+    _fstype, mount_opts, super_opts = table[point]
+    assert "nobarrier" not in mount_opts | super_opts, table[point]  # else this would not test the second source
+    in_force = mounts._read_ext4_options(mounts.parse_mountinfo_devices(text)[point])
+    assert in_force is not None and "nobarrier" in in_force, in_force
+    s, _r = _ingest(os.path.join(base, "store", "root"))
+    reasons = {(v.get("reason"), v.get("option")) for v in s.layout_filesystems.values()}
+    assert reasons == {("superblock-flush-disabled", "nobarrier")}, s.layout_filesystems
+
+
+@requires_matrix
+def test_required_real_barrier_is_attested_by_the_kernel():
+    """SF-R45-02 positive control: the same reader on the barrier loop names ``barrier``."""
+    text = mounts._read_mountinfo()
+    point = os.path.realpath(os.path.join(MATRIX, "ext4-barrier"))
+    in_force = mounts._read_ext4_options(mounts.parse_mountinfo_devices(text)[point])
+    assert in_force is not None and "barrier" in in_force and "nobarrier" not in in_force, in_force
+
+
+@requires_matrix
+@pytest.mark.parametrize("sub", ["disk/outer/bind", "ovl-disk/merged"])
+def test_required_runner_root_disk_is_withheld_for_nobarrier(sub):
+    """The runner fact behind the two "unknown" rows above, read from the live kernel:
+    /dev/root carries nobarrier, and the classifier names it (also through the overlay)."""
+    s, _r = _ingest(os.path.join(MATRIX, sub, "store", "root"))
+    reasons = {(v.get("reason"), v.get("option")) for v in s.layout_filesystems.values()}
+    assert reasons == {("mountinfo-flush-disabled", "nobarrier")}, s.layout_filesystems
 
 
 @requires_matrix
@@ -336,4 +416,4 @@ def test_a_database_file_bind_mounted_from_tmpfs_is_volatile(tmp_path, monkeypat
 def test_classify_linux_sees_a_file_bind_mount():
     tab = mounts.parse_mountinfo_filesystems(TABLE + "\n70 22 0:26 /db /srv/store/meta.db rw - tmpfs tmpfs rw")
     assert classify_linux("/srv/store/meta.db", tab)["class"] == "volatile"
-    assert classify_linux("/srv/store", tab)["class"] == "local"  # the directory alone hides it
+    assert classify_linux("/srv/store", tab, ext4_options=_barrier)["class"] == "local"  # the directory alone hides it

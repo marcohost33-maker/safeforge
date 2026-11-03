@@ -209,6 +209,7 @@ def test_required_release_gate_follows_the_library():
 @pytest.mark.real_sqlite
 @requires_real
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the job builds the library on Linux")
+@pytest.mark.usefixtures("injected_local_filesystem")  # subject: the real library, not the filesystem class
 def test_required_durability_flag_follows_the_library(tmp_path):
     fixed = _expect_fixed()
     # Assertion first: on a wrong library this fails as an assertion, not inside the store.

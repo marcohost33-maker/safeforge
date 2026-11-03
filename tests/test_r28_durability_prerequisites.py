@@ -43,6 +43,10 @@ import pytest
 
 from safeforge import IngestResult, LayoutNotDurable, ObjectStore, _faults, durable
 
+# The subject is the sync/policy prerequisites, not the filesystem class: injected local
+# (tests/conftest.py; the CI runner's root disk is nobarrier, so tmp_path is unknown there).
+pytestmark = pytest.mark.usefixtures("injected_local_filesystem")
+
 DEGRADED = "degraded:simulated-parent"
 UNSUPPORTED = "unsupported:simulated-parent"
 

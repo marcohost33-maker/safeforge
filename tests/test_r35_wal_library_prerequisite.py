@@ -20,6 +20,10 @@ from safeforge import IngestResult, ObjectStore, durable, sqlite_runtime
 from safeforge.offline_backup import _summary
 from safeforge.sqlite_runtime import sqlite_wal_reset_status
 
+# The subject is the SQLite library, not the filesystem class: injected local
+# (tests/conftest.py; the CI runner's root disk is nobarrier, so tmp_path is unknown there).
+pytestmark = pytest.mark.usefixtures("injected_local_filesystem")
+
 SID = "2026-01-01 00:00:00 r35"
 
 

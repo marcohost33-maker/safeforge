@@ -13,6 +13,89 @@ All notable changes to this project are documented here. The format follows
 `sqlite_runtime.loaded_sqlite_status` seam as `IngestResult`. A report, not a gate; the
 manifest and `verify_backup()` are unchanged.
 
+### R45 (2026-11-03): a flush switch the source cannot show withholds local
+
+007acc2 cross-family R28/R31/R36 (GPT-6) on 3cfcacd: ZFS stayed on the allowlist
+although the module's own docstring said its flush switch cannot be seen.
+
+- **Fixed SF-R45-01 (P1)**: `zfs` is off the Linux allowlist. `sync=disabled`
+  is a dataset property, absent from mountinfo, and fsync then returns before
+  the data is on stable storage (OpenZFS zfsprops(7)); a dataset with
+  `sync=standard` looks the same. Also through an overlay upper, and a table
+  that claims `sync=standard` attests nothing.
+- **Fixed SF-R45-02 (variant search, measured)**: `tune2fs -o nobarrier` and
+  `tune2fs -E mount_opts=nobarrier` set ext4's superblock default, and mountinfo
+  prints only what differs from it. On kernel 6.6.87.2 such a loop mount reads
+  `rw,relatime - ext4 /dev/loop1 rw` while `/proc/fs/ext4/loop1/options` says
+  `nobarrier`. ext4 is now local only if that file says `barrier`; else `unknown`
+  with `reason: "superblock-flush-disabled"` or `"ext4-options-unavailable"`
+  (no sysfs entry for the device or an unreadable file, e.g. some sandboxes).
+- **Fixed SF-R46-01 (007acc2 cross-family, source review)**: `classify_linux` is
+  public, and a direct call without `ext4_options` skipped the check, so a plain
+  ext4 table gave `local`. It now gives `unknown` with
+  `reason: "ext4-options-unavailable"`. `filesystems()` always passed the source,
+  so the store path is unchanged.
+- **Fixed SF-R45-03**: f2fs `disable_roll_forward` withholds the class: at mount,
+  `fs/f2fs/super.c` runs "recover fsynced data" only without it (source read,
+  no f2fs run).
+- **Behaviour change (API)**: every ZFS store, including one with `sync=standard`
+  or `always`, now reports `filesystem_class == "unknown"` and
+  `durability_prerequisites_ok = False`, because the two cannot be told apart
+  from here. Open and ingest are unchanged. This is a claim withheld, not a
+  finding about any ZFS system: no ZFS kernel run backs this change. Restoring
+  it needs a source that attests the effective `sync` property for the path.
+- **Not visible, unchanged**: device write caches, flushes dropped below the
+  filesystem, process-level fsync overrides (README "No power-loss proof").
+- **Tests**: `tests/test_r45_hidden_flush_switch.py`; the CI job `mounts` gets a
+  loop-mounted ext4 with `tune2fs -o nobarrier` as a real negative control.
+
+### R42/R43 (2026-11-01): local is an allowlist, flush switches count, the class is re-checked at ACK
+
+Issue #7; 007acc2 cross-family R42/R43/R44 (GPT-6), triaged against 066cbdf.
+
+- **Fixed SF-R42-01 (P1)**: mount and super options were only read for
+  overlayfs `volatile`; every type outside the volatile and network lists
+  was `local` -- ext4 `nobarrier`/`barrier=0`, f2fs `fsync_mode=nobarrier` or
+  `checkpoint=disable`, FUSE (LazyFS), any type never seen. `local` is now an
+  allowlist: Linux ext4, xfs, btrfs, zfs, f2fs; macOS apfs. Any other type is
+  `unknown` with `reason: "fs-type-not-attested"`; an allowlisted type with
+  `nobarrier`, `barrier=0`, `fsync_mode=nobarrier` or `checkpoint=disable[:...]`
+  in either option set is `unknown` with `reason: "mountinfo-flush-disabled"`
+  and `option`, also when reached through an overlay's upper directory.
+  Limit: ZFS `sync=disabled` is a dataset property, not in mountinfo.
+- **Fixed SF-R42-02 / SF-R44-01/02 (Windows)**: every drive type except
+  REMOTE and RAMDISK was local, including 0 (unknown), 1 (no root),
+  2 (removable) and 5 (CD-ROM), with any filesystem name. Now only NTFS on
+  `DRIVE_FIXED` is local; otherwise `unknown` (`reason: "not-a-fixed-drive"`
+  or `"fs-type-not-attested"`, e.g. ReFS, FAT32, exFAT).
+- **Fixed SF-R43-TOCTOU (P1)**: the class was decided once in the
+  constructor and read at ACK time. After each status COMMIT, `ingest()` now
+  re-reads the class (mountinfo on Linux) and `(realpath, st_dev, st_ino)` of
+  root/, objects/, staging/, the database directory and file, and compares
+  both with the constructor's; any difference or observation error makes the
+  flag False for that ingest (never an exception; the ingest stays
+  committed). `IngestResult.filesystem_class` is now the post-COMMIT class;
+  `ObjectStore.filesystem_class` stays the class at open.
+- **SF-R42-03 (CI)**: the `mounts` job loop-mounts two fresh ext4 images,
+  with barriers (positive control: local, flag True) and `nobarrier`
+  (negative control: unknown, flag False); the pure mountinfo fixtures in
+  `tests/test_r42_flush_classification.py` run on every runner.
+- **CI runner fact**: the GitHub-hosted ubuntu-24.04 root disk is mounted
+  `nobarrier` (observed 2026-11-01, PR #8, mounts job 125000197175:
+  `/dev/root ... rw,discard,journal_async_commit,nobarrier,...`), so
+  `tmp_path` there is `unknown` and never claims durability. Tests whose
+  subject is another prerequisite (syncs, SQLite policy and library, the
+  ancestor walk) now request the named fixture `injected_local_filesystem`
+  instead of depending on where `tmp_path` lives; the matrix expects the
+  root-disk bind and overlay cases `unknown` and gets its real `local` bind
+  and overlay positive controls from the barrier loop mount.
+- **Behaviour change (API)**: stores that reported `filesystem_class ==
+  "local"` before may now report `"unknown"` and `durability_prerequisites_ok
+  = False`: LazyFS and other FUSE mounts, ext2/ext3, vfat/exFAT, macOS HFS+,
+  ReFS (including Windows Dev Drive), removable or unknown Windows drive types,
+  and allowlisted filesystems mounted with flushes off. Open and ingest are
+  unchanged. Each ingest of a local store now reads the mount table once more.
+
 ### R41 (2026-10-30): the durability flag observes the filesystem; real boundary libraries and mounts
 
 Roadmap R4/R5 (2026-10-29), SafeForge P0 "filesystem durability cross-platform

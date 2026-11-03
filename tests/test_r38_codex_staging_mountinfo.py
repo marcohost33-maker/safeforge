@@ -94,6 +94,7 @@ def test_r38_01_retry_reproves_an_external_staging_ancestor(tmp_path, fake):
     assert retry.layout_sync[external].startswith("failed:")
 
 
+@pytest.mark.usefixtures("injected_local_filesystem")  # subject: the staging chain, not the filesystem class
 def test_r38_01_external_staging_opens_once_the_ancestor_sync_succeeds(tmp_path, fake):
     """Negative control: the same layout opens and ACKs when nothing fails."""
     root, kw, external = _external_layout(tmp_path)

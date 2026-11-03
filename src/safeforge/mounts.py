@@ -62,6 +62,8 @@ from collections.abc import Callable
 __all__ = ["MountProbe", "parse_mountinfo", "parse_mountinfo_filesystems", "probe"]
 
 _MOUNTINFO = "/proc/self/mountinfo"
+_SYS_DEV_BLOCK = "/sys/dev/block"
+_PROC_FS_EXT4 = "/proc/fs/ext4"
 _OCTAL = re.compile(r"\\([0-7]{3})")
 
 
@@ -104,6 +106,15 @@ def parse_mountinfo_filesystems(text: str) -> dict[str, tuple[str, frozenset[str
     for point in ambiguous:
         out.setdefault(point, ("", frozenset(), frozenset()))
     return out
+
+
+def parse_mountinfo_devices(text: str) -> dict[str, tuple[int, int]] | None:
+    """Visible mount points -> ``(major, minor)``; None if malformed. Same parser and rules
+    as :func:`parse_mountinfo_filesystems`, so both name the same mounts (SF-R45-02)."""
+    parsed = _parse_visible(text)
+    if parsed is None:
+        return None
+    return {point: dev for point, (dev, _fs) in parsed[0].items()}
 
 
 _Visible = dict[str, tuple[tuple[int, int], tuple[str, frozenset[str], frozenset[str]]]]
@@ -284,6 +295,22 @@ def _read_mountinfo() -> str | None:
         with open(_MOUNTINFO, encoding="utf-8", errors="surrogateescape") as f:
             return f.read()
     except OSError:
+        return None
+
+
+def _read_ext4_options(device: tuple[int, int]) -> frozenset[str] | None:
+    """Every option in force on an ext4 block device, defaults included; None if unreadable.
+
+    ``/proc/fs/ext4/<name>/options`` calls _ext4_show_options() with nodefs=1, and unlike
+    mountinfo it prints options that equal the superblock default (SF-R45-02). ``<name>``
+    is the kernel's block device name, which sysfs gives for the mount's major:minor.
+    """
+    major, minor = device
+    try:
+        name = os.path.basename(os.readlink(f"{_SYS_DEV_BLOCK}/{major}:{minor}"))
+        with open(f"{_PROC_FS_EXT4}/{name}/options", encoding="ascii") as f:
+            return frozenset(f.read().split())
+    except (OSError, ValueError):  # UnicodeDecodeError is a ValueError
         return None
 
 

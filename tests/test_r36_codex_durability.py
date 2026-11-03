@@ -79,6 +79,7 @@ def test_r36_01_retry_reproves_an_ancestor_created_by_a_failed_open(tmp_path, fa
     assert retry.layout_sync[os.path.realpath(existing)].startswith("failed:")
 
 
+@pytest.mark.usefixtures("injected_local_filesystem")  # subject: the ancestor sync, not the filesystem class
 def test_r36_01_retry_opens_once_the_ancestor_sync_succeeds(tmp_path, fake):
     """Negative control: the same layout opens and ACKs when nothing fails."""
     existing = tmp_path / "existing"

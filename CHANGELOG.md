@@ -6,6 +6,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Offline backup report names its SQLite library (R35 follow-up, 2026-11-02)
+
+`backup_offline()` (and so `backup_coordinated()`) now reports `sqlite_version` and
+`sqlite_wal_reset_fixed` for the connection that runs `read.backup()`, through the same
+`sqlite_runtime.loaded_sqlite_status` seam as `IngestResult`. A report, not a gate; the
+manifest and `verify_backup()` are unchanged.
+
 ### R45 (2026-11-03): a flush switch the source cannot show withholds local
 
 007acc2 cross-family R28/R31/R36 (GPT-6) on 3cfcacd: ZFS stayed on the allowlist

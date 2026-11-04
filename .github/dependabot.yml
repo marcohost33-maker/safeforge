@@ -1,0 +1,20 @@
+# Monatlich und gruppiert, wie in wasser-matrix. rebase-strategy bleibt disabled:
+# Ein Dependabot-Rebase erzeugt einen neuen Kopf und macht aeltere Pruefbelege stale.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    rebase-strategy: disabled
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: pip
+    directory: "/"
+    rebase-strategy: disabled
+    schedule:
+      interval: monthly
+    groups:
+      python:
+        patterns: ["*"]

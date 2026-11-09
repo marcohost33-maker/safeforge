@@ -152,8 +152,16 @@ jobs:
 
   # Power cut, data half: LazyFS drops every unsynced byte (tests/lazyfs_harness.py).
   # REQUIRED=1 turns a broken FUSE/LazyFS setup into a failure instead of a skip.
+  # Pinned to ubuntu-24.04: on the ubuntu-26.04 userland (fuse3 3.18.2, apt
+  # cmake 4.2.3) every case that reaches SQLite dies with SIGBUS in
+  # sqlite3WalBeginReadTransaction, i.e. on the mmap'ed WAL index (-shm) on the
+  # LazyFS mount (CI run 42692920007: 7 failed, rc -7). On the same kernel
+  # the 24.04 userland (fuse3 3.14.0) passes 24/24, so the cause is the
+  # LazyFS/libfuse build on 26.04 rather than the kernel or safeforge. The
+  # instrument fails there; the property under test does not change. Unpin once
+  # LazyFS runs cleanly on 26.04.
   powerloss:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

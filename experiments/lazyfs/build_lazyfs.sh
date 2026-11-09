@@ -33,7 +33,12 @@ fetch https://github.com/gabime/spdlog.git spdlog "$SPDLOG_SHA"
 fetch https://github.com/ToruNiina/toml11.git toml11 "$TOML11_SHA"
 
 pc="$PWD/lazyfs/libs/libpcache/build"
+# toml11 v3.7.1 declares cmake_minimum_required(VERSION 3.1); CMake >= 4.0
+# (ubuntu-26.04 apt: 4.2.3) refuses anything below 3.5 unless the policy floor
+# is raised. Only toml11 is below 3.5 (libpcache, lazyfs, spdlog: 3.10), and it
+# is only configured here. Harmless on CMake 3.x.
 cmake -S lazyfs/libs/libpcache -B "$pc" \
+    -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
     -DFETCHCONTENT_SOURCE_DIR_SPDLOG="$PWD/spdlog" \
     -DFETCHCONTENT_SOURCE_DIR_TOML="$PWD/toml11" \
     -DFETCHCONTENT_FULLY_DISCONNECTED=ON
